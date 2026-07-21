@@ -28,11 +28,6 @@ public final class PlayerListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
-        // 检查是否拥有跳过登录验证权限
-        if (player.hasPermission("htlogin.bypass")) {
-            return;
-        }
-
         if (authManager.hasAccount(player)) {
             authManager.addPendingLogin(player);
             player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login")));
@@ -66,7 +61,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (authManager.isLoggedIn(player)) return;
         if (event.getTo() == null) return;
 
@@ -80,7 +74,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onChat(AsyncPlayerChatEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             if (plugin.getConfigManager().preventChat()) {
                 event.setCancelled(true);
@@ -92,7 +85,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (authManager.isLoggedIn(player)) return;
 
         // 未登录/未注册玩家只能使用登录/注册相关命令
@@ -109,7 +101,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockBreak(BlockBreakEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }
@@ -118,7 +109,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockPlace(BlockPlaceEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }
@@ -127,7 +117,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDamage(EntityDamageEvent event) {
         if (event.getEntity() instanceof Player player) {
-            if (player.hasPermission("htlogin.bypass")) return;
             if (!authManager.isLoggedIn(player)) {
                 event.setCancelled(true);
             }
@@ -137,7 +126,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onFoodChange(FoodLevelChangeEvent event) {
         if (event.getEntity() instanceof Player player) {
-            if (player.hasPermission("htlogin.bypass")) return;
             if (!authManager.isLoggedIn(player)) {
                 event.setCancelled(true);
             }
@@ -147,7 +135,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDropItem(PlayerDropItemEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }
@@ -156,7 +143,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPickupItem(PlayerAttemptPickupItemEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }
@@ -165,7 +151,6 @@ public final class PlayerListener implements Listener {
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteract(PlayerInteractEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission("htlogin.bypass")) return;
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }

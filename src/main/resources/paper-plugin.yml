@@ -11,6 +11,3 @@ permissions:
   htlogin.admin:
     description: 管理员权限
     default: op
-  htlogin.bypass:
-    description: 跳过登录验证
-    default: false
