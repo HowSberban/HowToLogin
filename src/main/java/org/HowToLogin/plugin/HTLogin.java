@@ -1,7 +1,6 @@
 package org.HowToLogin.plugin;
 
 import io.papermc.paper.command.brigadier.Commands;
-import io.papermc.paper.plugin.lifecycle.event.LifecycleEventManager;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.HowToLogin.plugin.auth.AuthManager;
@@ -10,7 +9,6 @@ import org.HowToLogin.plugin.config.ConfigManager;
 import org.HowToLogin.plugin.data.PlayerDataManager;
 import org.HowToLogin.plugin.listener.PlayerListener;
 import org.HowToLogin.plugin.util.FoliaHelper;
-import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -49,9 +47,9 @@ public final class HTLogin extends JavaPlugin {
 
     private void registerCommands() {
         // Paper 插件规范：通过 LifecycleEvents 程序化注册命令
-        // getLifecycleManager() 返回 LifecycleEventManager<? extends Plugin>，
-        // 使用通配符类型接收，避免赋值时的类型实参警告
-        LifecycleEventManager<? extends Plugin> manager = this.getLifecycleManager();
+        // 使用 var 接收 getLifecycleManager() 的返回值，让编译器自动推断通配符类型，
+        // 避免显式声明 LifecycleEventManager<Plugin> 时与实际返回类型不匹配的警告
+        var manager = this.getLifecycleManager();
         manager.registerEventHandler(LifecycleEvents.COMMANDS, event -> {
             Commands commands = event.registrar();
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));

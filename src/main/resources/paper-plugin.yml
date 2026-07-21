@@ -3,7 +3,8 @@ version: '1.0.0-SNAPSHOT'
 main: org.HowToLogin.plugin.HTLogin
 api-version: '1.21'
 load: STARTUP
-authors: HowSberban
+authors:
+  - HowSberban
 description: A login plugin with Paper API.
 folia-supported: true
 

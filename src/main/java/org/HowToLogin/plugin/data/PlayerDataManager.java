@@ -98,7 +98,10 @@ public final class PlayerDataManager {
 
     public static final class PlayerData {
         private String passwordHash;
+        // Gson 序列化时通过反射读取这些字段（无显式 getter），IDE 静态分析无法识别
+        @SuppressWarnings("unused")
         private String ip;
+        @SuppressWarnings("unused")
         private long lastLogin;
 
         // Gson 反序列化需要无参构造函数（通过反射调用，IDE 静态分析无法识别）
