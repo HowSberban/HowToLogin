@@ -4,7 +4,6 @@ import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.I18n;
-import org.jetbrains.annotations.NotNull;
 
 public final class HTLoginCommand implements BasicCommand {
 
@@ -15,7 +14,7 @@ public final class HTLoginCommand implements BasicCommand {
     }
 
     @Override
-    public void execute(@NotNull CommandSourceStack stack, @NotNull String[] args) {
+    public void execute(CommandSourceStack stack, String[] args) {
         if (args.length < 1) {
             stack.getSender().sendMessage(HTLogin.legacy(I18n.get("htlogin.usage")));
             return;
@@ -33,7 +32,7 @@ public final class HTLoginCommand implements BasicCommand {
     }
 
     @Override
-    public @NotNull String permission() {
+    public String permission() {
         return "htlogin.admin";
     }
 }

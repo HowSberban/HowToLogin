@@ -1,6 +1,5 @@
 package org.HowToLogin.plugin.auth;
 
-import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.data.PlayerDataManager;
 import org.HowToLogin.plugin.data.PlayerDataManager.PlayerData;
 import org.bukkit.entity.Player;
@@ -11,14 +10,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class AuthManager {
 
-    private final HTLogin plugin;
     private final PlayerDataManager dataManager;
     // 线程安全集合，用于 Folia 多线程区域化调度
     private final Set<UUID> loggedIn = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
 
-    public AuthManager(HTLogin plugin, PlayerDataManager dataManager) {
-        this.plugin = plugin;
+    public AuthManager(PlayerDataManager dataManager) {
         this.dataManager = dataManager;
     }
 
@@ -41,19 +38,18 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
 
-        if (!PasswordHash.checkPassword(password, data.passwordHash())) {
-            return false;
-        }
+        if (PasswordHash.checkPassword(password, data.passwordHash())) {
+            data.lastLogin(System.currentTimeMillis() / 1000);
+            if (player.getAddress() != null) {
+                data.ip(player.getAddress().getAddress().getHostAddress());
+            }
+            dataManager.save();
 
-        data.lastLogin(System.currentTimeMillis() / 1000);
-        if (player.getAddress() != null) {
-            data.ip(player.getAddress().getAddress().getHostAddress());
+            loggedIn.add(uuid);
+            pendingLogin.remove(uuid);
+            return true;
         }
-        dataManager.save();
-
-        loggedIn.add(uuid);
-        pendingLogin.remove(uuid);
-        return true;
+        return false;
     }
 
     // Logout
@@ -69,13 +65,12 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
 
-        if (!PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
-            return false;
+        if (PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+            String newHash = PasswordHash.hashPassword(newPassword);
+            dataManager.updatePassword(uuid, newHash);
+            return true;
         }
-
-        String newHash = PasswordHash.hashPassword(newPassword);
-        dataManager.updatePassword(uuid, newHash);
-        return true;
+        return false;
     }
 
     // Unregister
@@ -103,15 +98,7 @@ public final class AuthManager {
         return dataManager.hasAccount(player.getUniqueId());
     }
 
-    public boolean isPendingLogin(Player player) {
-        return pendingLogin.contains(player.getUniqueId());
-    }
-
     public void addPendingLogin(Player player) {
         pendingLogin.add(player.getUniqueId());
-    }
-
-    public void removePendingLogin(Player player) {
-        pendingLogin.remove(player.getUniqueId());
     }
 }

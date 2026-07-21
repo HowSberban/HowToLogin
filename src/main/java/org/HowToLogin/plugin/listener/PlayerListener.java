@@ -62,9 +62,9 @@ public final class PlayerListener implements Listener {
     public void onMove(PlayerMoveEvent event) {
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
-        if (event.getTo() == null) return;
 
         // 未登录/未注册玩家只允许视角转动，禁止水平移动
+        // Paper API 中 PlayerMoveEvent.getTo() 不会返回 null，故无需 null 检查
         if (event.getFrom().getBlockX() != event.getTo().getBlockX()
                 || event.getFrom().getBlockZ() != event.getTo().getBlockZ()) {
             event.setCancelled(true);
@@ -72,7 +72,7 @@ public final class PlayerListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
-    public void onChat(AsyncPlayerChatEvent event) {
+    public void onChat(io.papermc.paper.event.player.AsyncChatEvent event) {
         Player player = event.getPlayer();
         if (!authManager.isLoggedIn(player)) {
             if (plugin.getConfigManager().preventChat()) {

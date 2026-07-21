@@ -26,7 +26,7 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         I18n.init(this);
         this.playerDataManager = new PlayerDataManager(this);
-        this.authManager = new AuthManager(this, playerDataManager);
+        this.authManager = new AuthManager(playerDataManager);
 
         if (FoliaHelper.isFolia()) {
             getLogger().info(I18n.get("plugin.folia_detected"));
@@ -49,14 +49,16 @@ public final class HTLogin extends JavaPlugin {
 
     private void registerCommands() {
         // Paper 插件规范：通过 LifecycleEvents 程序化注册命令
-        LifecycleEventManager<Plugin> manager = this.getLifecycleManager();
+        // getLifecycleManager() 返回 LifecycleEventManager<? extends Plugin>，
+        // 使用通配符类型接收，避免赋值时的类型实参警告
+        LifecycleEventManager<? extends Plugin> manager = this.getLifecycleManager();
         manager.registerEventHandler(LifecycleEvents.COMMANDS, event -> {
             Commands commands = event.registrar();
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
-            commands.register("login", "登录账号", List.of("l"), new LoginCommand(this, authManager));
+            commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
-            commands.register("logout", "退出登录", List.of(), new LogoutCommand(this, authManager));
-            commands.register("unregister", "删除账号（管理员）", List.of(), new UnregisterCommand(this, authManager));
+            commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
+            commands.register("unregister", "删除账号（管理员）", List.of(), new UnregisterCommand(authManager));
             commands.register("htlogin", "插件管理命令", List.of(), new HTLoginCommand(this));
         });
     }
@@ -67,14 +69,6 @@ public final class HTLogin extends JavaPlugin {
 
     public ConfigManager getConfigManager() {
         return configManager;
-    }
-
-    public PlayerDataManager getPlayerDataManager() {
-        return playerDataManager;
-    }
-
-    public AuthManager getAuthManager() {
-        return authManager;
     }
 
     /** 将旧版 '&' 颜色代码转换为 Adventure Component */

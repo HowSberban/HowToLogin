@@ -3,9 +3,6 @@
 # 登录/注册超时时间（秒），0 = 不限制
 login-timeout: 60
 
-# 会话超时时间（秒），0 = 无超时，每次重连都需要重新登录
-session-timeout: 300
-
 # 密码长度限制
 min-password-length: 4
 max-password-length: 32

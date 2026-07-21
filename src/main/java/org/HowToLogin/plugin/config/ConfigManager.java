@@ -6,10 +6,8 @@ import org.HowToLogin.plugin.HTLogin;
 public final class ConfigManager {
 
     private final HTLogin plugin;
-    private FileConfiguration config;
 
     private int loginTimeout;
-    private int sessionTimeout;
     private int minPasswordLength;
     private int maxPasswordLength;
     private boolean kickOnTimeout;
@@ -23,11 +21,10 @@ public final class ConfigManager {
     public void load() {
         plugin.saveDefaultConfig();
         plugin.reloadConfig();
-        this.config = plugin.getConfig();
+        FileConfiguration config = plugin.getConfig();
         // 从 config.yml 加载各项配置参数
 
         this.loginTimeout = config.getInt("login-timeout", 60);
-        this.sessionTimeout = config.getInt("session-timeout", 300);
         this.minPasswordLength = config.getInt("min-password-length", 4);
         this.maxPasswordLength = config.getInt("max-password-length", 32);
         this.kickOnTimeout = config.getBoolean("kick-on-timeout", true);
@@ -39,7 +36,6 @@ public final class ConfigManager {
     }
 
     public int loginTimeout() { return loginTimeout; }
-    public int sessionTimeout() { return sessionTimeout; }
     public int minPasswordLength() { return minPasswordLength; }
     public int maxPasswordLength() { return maxPasswordLength; }
     public boolean kickOnTimeout() { return kickOnTimeout; }

@@ -20,6 +20,13 @@ dependencies {
     compileOnly("com.google.code.gson:gson:2.10.1")
 }
 
+configurations.configureEach {
+    resolutionStrategy.force(
+            'org.codehaus.plexus:plexus-utils:3.6.1',
+            'org.apache.commons:commons-lang3:3.18.0'
+    )
+}
+
 tasks {
     runServer {
         // 配置 Minecraft 版本，必须使用完整版本号

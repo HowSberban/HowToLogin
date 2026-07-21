@@ -50,8 +50,10 @@ public final class PlayerDataManager {
 
     private void syncSave() {
         try {
-            if (!dataFile.getParentFile().exists()) {
-                dataFile.getParentFile().mkdirs();
+            File parent = dataFile.getParentFile();
+            if (!parent.exists() && !parent.mkdirs()) {
+                plugin.getLogger().warning("无法创建数据目录: " + parent.getAbsolutePath());
+                return;
             }
             try (Writer writer = Files.newBufferedWriter(dataFile.toPath(), StandardCharsets.UTF_8)) {
                 Map<String, PlayerData> raw = new java.util.LinkedHashMap<>();
@@ -99,6 +101,8 @@ public final class PlayerDataManager {
         private String ip;
         private long lastLogin;
 
+        // Gson 反序列化需要无参构造函数（通过反射调用，IDE 静态分析无法识别）
+        @SuppressWarnings("unused")
         public PlayerData() {}
 
         public PlayerData(String passwordHash, String ip) {
@@ -108,8 +112,6 @@ public final class PlayerDataManager {
         }
 
         public String passwordHash() { return passwordHash; }
-        public String ip() { return ip; }
-        public long lastLogin() { return lastLogin; }
 
         public void lastLogin(long lastLogin) { this.lastLogin = lastLogin; }
         public void ip(String ip) { this.ip = ip; }
