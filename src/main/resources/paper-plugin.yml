@@ -1,0 +1,16 @@
+name: HTLogin
+version: '1.0.0-SNAPSHOT'
+main: org.HowToLogin.plugin.HTLogin
+api-version: '1.21'
+load: STARTUP
+authors: HowSberban
+description: A login plugin with Paper API.
+folia-supported: true
+
+permissions:
+  htlogin.admin:
+    description: 管理员权限
+    default: op
+  htlogin.bypass:
+    description: 跳过登录验证
+    default: false
