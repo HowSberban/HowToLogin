@@ -23,11 +23,11 @@ public final class UnregisterCommand implements BasicCommand {
             return;
         }
 
-        // 注意：getOfflinePlayer(name) 即使玩家不存在也会返回离线 UUID，
-        // 不会返回 null；玩家未注册时 unregister() 会返回 false
-        OfflinePlayer target = Bukkit.getOfflinePlayer(args[0]);
+        // 使用 getOfflinePlayerIfCached 避免阻塞主线程（不会发起 Mojang API 请求）
+        // 返回 null 表示该玩家从未进服，必然未注册
+        OfflinePlayer target = Bukkit.getOfflinePlayerIfCached(args[0]);
 
-        if (!authManager.unregister(target.getUniqueId())) {
+        if (target == null || !authManager.unregister(target.getUniqueId())) {
             stack.getSender().sendMessage(HTLogin.legacy(I18n.get("unregister.not_found")));
             return;
         }

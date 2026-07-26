@@ -39,10 +39,23 @@ public final class LoginCommand implements BasicCommand {
             return;
         }
 
+        // 锁定检查：优先于密码验证
+        if (authManager.isLocked(player)) {
+            long remaining = authManager.getLockRemaining(player);
+            player.sendMessage(HTLogin.legacy(I18n.get("login.locked", remaining)));
+            return;
+        }
+
         if (authManager.login(player, args[0])) {
             player.sendMessage(HTLogin.legacy(I18n.get("login.success")));
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password")));
+            if (authManager.isLocked(player)) {
+                // 这次失败触发了锁定
+                long remaining = authManager.getLockRemaining(player);
+                player.sendMessage(HTLogin.legacy(I18n.get("login.locked", remaining)));
+            } else {
+                player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password")));
+            }
         }
     }
 }

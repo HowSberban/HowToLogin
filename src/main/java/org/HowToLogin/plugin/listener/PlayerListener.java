@@ -1,9 +1,11 @@
 package org.HowToLogin.plugin.listener;
 
+import io.papermc.paper.event.player.AsyncChatEvent;
 import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.I18n;
 import org.HowToLogin.plugin.auth.AuthManager;
 import org.HowToLogin.plugin.util.FoliaHelper;
+import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -35,7 +37,6 @@ public final class PlayerListener implements Listener {
         } else {
             player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register")));
         }
-        player.sendMessage(HTLogin.legacy(I18n.get("listener.welcome")));
     }
 
     private void scheduleLoginTimeout(Player player) {
@@ -60,30 +61,53 @@ public final class PlayerListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onMove(PlayerMoveEvent event) {
+        if (!plugin.getConfigManager().preventMove()) return;
+
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
 
-        // 未登录/未注册玩家只允许视角转动，禁止水平移动
-        // Paper API 中 PlayerMoveEvent.getTo() 不会返回 null，故无需 null 检查
-        if (event.getFrom().getBlockX() != event.getTo().getBlockX()
-                || event.getFrom().getBlockZ() != event.getTo().getBlockZ()) {
-            event.setCancelled(true);
-        }
-    }
+        // Paper API 保证 getTo() 非 null（@NullMarked）
+        // 使用 setTo() 而非 setCancelled(true)：
+        //   1. 避免客户端与服务端位置不同步导致的画面卡顿
+        //   2. 使用精确坐标比较（getX/Y/Z），避免方块坐标精度不足被绕过
+        Location from = event.getFrom();
+        Location to = event.getTo();
+        boolean positionChanged = from.getX() != to.getX()
+                || from.getY() != to.getY()
+                || from.getZ() != to.getZ();
+        boolean lookChanged = from.getYaw() != to.getYaw()
+                || from.getPitch() != to.getPitch();
 
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onChat(io.papermc.paper.event.player.AsyncChatEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
-            if (plugin.getConfigManager().preventChat()) {
-                event.setCancelled(true);
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login")));
+        boolean preventLook = plugin.getConfigManager().preventLook();
+        if (preventLook) {
+            // 禁止位置和视角变化：全部回滚到 from
+            if (positionChanged || lookChanged) {
+                event.setTo(from);
+            }
+        } else {
+            // 仅禁止位置移动：保留 to 的视角（yaw/pitch）
+            if (positionChanged) {
+                event.setTo(new Location(from.getWorld(), from.getX(), from.getY(), from.getZ(),
+                        to.getYaw(), to.getPitch()));
             }
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
+    public void onChat(AsyncChatEvent event) {
+        if (!plugin.getConfigManager().preventChat()) return;
+
+        Player player = event.getPlayer();
+        if (!authManager.isLoggedIn(player)) {
+            event.setCancelled(true);
+            player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login")));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
+        if (!plugin.getConfigManager().preventCommand()) return;
+
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
 
@@ -95,63 +119,63 @@ public final class PlayerListener implements Listener {
         }
 
         event.setCancelled(true);
-        player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login_cmd")));
+        player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login")));
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockBreak(BlockBreakEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onBlockPlace(BlockPlaceEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDamage(EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player player) {
-            if (!authManager.isLoggedIn(player)) {
-                event.setCancelled(true);
-            }
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && event.getEntity() instanceof Player player
+                && !authManager.isLoggedIn(player)) {
+            event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onFoodChange(FoodLevelChangeEvent event) {
-        if (event.getEntity() instanceof Player player) {
-            if (!authManager.isLoggedIn(player)) {
-                event.setCancelled(true);
-            }
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && event.getEntity() instanceof Player player
+                && !authManager.isLoggedIn(player)) {
+            event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDropItem(PlayerDropItemEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPickupItem(PlayerAttemptPickupItemEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteract(PlayerInteractEvent event) {
-        Player player = event.getPlayer();
-        if (!authManager.isLoggedIn(player)) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }

@@ -24,7 +24,7 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         I18n.init(this);
         this.playerDataManager = new PlayerDataManager(this);
-        this.authManager = new AuthManager(playerDataManager);
+        this.authManager = new AuthManager(playerDataManager, configManager);
 
         if (FoliaHelper.isFolia()) {
             getLogger().info(I18n.get("plugin.folia_detected"));

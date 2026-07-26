@@ -1,16 +1,34 @@
 # HTLogin 配置文件
 
-# 登录/注册超时时间（秒），0 = 不限制
-login-timeout: 60
+# 登录设置
+login:
+  # 登录/注册超时时间（秒），0 = 不限制
+  timeout: 60
+  # 超时未登录是否踢出玩家
+  kick-on-timeout: true
+  # 连续登录失败次数上限，超过后锁定
+  max-attempts: 5
+  # 锁定时长（秒）
+  lock-duration: 300
 
-# 密码长度限制
-min-password-length: 4
-max-password-length: 32
+# 密码规则
+password:
+  # 密码最小长度
+  min-length: 6
+  # 密码最大长度
+  max-length: 32
 
-# 超时未登录是否踢出玩家
-kick-on-timeout: true
-
-# 登录前是否禁止聊天
-prevent-chat-before-login: true
+# 行为限制（登录前禁止的行为）
+prevent:
+  # 禁止移动
+  move: true
+  # 禁止转动视角（仅当 move 启用时生效）
+  look: true
+  # 禁止聊天
+  chat: true
+  # 禁止执行非登录/注册命令
+  command: true
+  # 禁止与世界交互（破坏/放置方块、交互、丢弃/拾取物品、伤害、饥饿）
+  world-interaction: true
 
 # 消息文本请在 translations.properties 中修改

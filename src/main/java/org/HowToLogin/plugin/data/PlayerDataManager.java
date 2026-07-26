@@ -97,12 +97,13 @@ public final class PlayerDataManager {
     }
 
     public static final class PlayerData {
-        private String passwordHash;
-        // Gson 序列化时通过反射读取这些字段（无显式 getter），IDE 静态分析无法识别
+        // volatile 保证可见性：主线程写入后，异步保存线程能读到最新值
+        // 适用于单写入场景（Folia 区域线程写入，异步线程只读）
+        private volatile String passwordHash;
         @SuppressWarnings("unused")
-        private String ip;
+        private volatile String ip;
         @SuppressWarnings("unused")
-        private long lastLogin;
+        private volatile long lastLogin;
 
         // Gson 反序列化需要无参构造函数（通过反射调用，IDE 静态分析无法识别）
         @SuppressWarnings("unused")
