@@ -8,7 +8,7 @@ import org.HowToLogin.plugin.command.*;
 import org.HowToLogin.plugin.config.ConfigManager;
 import org.HowToLogin.plugin.data.PlayerDataManager;
 import org.HowToLogin.plugin.listener.PlayerListener;
-import org.HowToLogin.plugin.util.FoliaHelper;
+import org.bukkit.Bukkit;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -24,11 +24,7 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         I18n.init(this);
         this.playerDataManager = new PlayerDataManager(this);
-        this.authManager = new AuthManager(playerDataManager, configManager);
-
-        if (FoliaHelper.isFolia()) {
-            getLogger().info(I18n.get("plugin.folia_detected"));
-        }
+        this.authManager = new AuthManager(this, playerDataManager, configManager);
 
         registerCommands();
         registerListeners();
@@ -40,8 +36,11 @@ public final class HTLogin extends JavaPlugin {
     public void onDisable() {
         if (playerDataManager != null) {
             playerDataManager.saveSync();
+            playerDataManager.close();
         }
-        FoliaHelper.cancelTasks(this);
+        // Paper 1.20+ 统一调度器 API，兼容 Folia
+        Bukkit.getGlobalRegionScheduler().cancelTasks(this);
+        Bukkit.getAsyncScheduler().cancelTasks(this);
         getLogger().info(I18n.get("plugin.disabled"));
     }
 

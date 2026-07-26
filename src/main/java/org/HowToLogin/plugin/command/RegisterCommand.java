@@ -54,6 +54,8 @@ public final class RegisterCommand implements BasicCommand {
 
         if (authManager.register(player, password)) {
             player.sendMessage(HTLogin.legacy(I18n.get("register.success")));
+            // 注册成功后传送到默认世界 spawn（启用坐标保护时生效）
+            authManager.returnToLogoutLocation(player);
         } else {
             player.sendMessage(HTLogin.legacy(I18n.get("register.failed")));
         }

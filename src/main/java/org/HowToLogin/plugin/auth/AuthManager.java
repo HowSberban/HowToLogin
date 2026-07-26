@@ -1,27 +1,37 @@
 package org.HowToLogin.plugin.auth;
 
+import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.config.ConfigManager;
 import org.HowToLogin.plugin.data.PlayerDataManager;
 import org.HowToLogin.plugin.data.PlayerDataManager.PlayerData;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.World;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class AuthManager {
 
+    private final HTLogin plugin;
     private final PlayerDataManager dataManager;
     private final ConfigManager configManager;
     // 线程安全集合，用于 Folia 多线程区域化调度
     private final Set<UUID> loggedIn = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
+    // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
+    private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
     // 暴力破解防护：记录失败次数和锁定到期时间
     private final Map<UUID, Integer> failedAttempts = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lockUntil = new ConcurrentHashMap<>();
 
-    public AuthManager(PlayerDataManager dataManager, ConfigManager configManager) {
+    public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
+        this.plugin = plugin;
         this.dataManager = dataManager;
         this.configManager = configManager;
     }
@@ -32,7 +42,7 @@ public final class AuthManager {
         if (dataManager.hasAccount(uuid)) {
             return false;
         }
-        String hash = PasswordHash.hashPassword(password);
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm());
         dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
@@ -49,11 +59,20 @@ public final class AuthManager {
         if (data == null) return false;
 
         if (PasswordHash.checkPassword(password, data.passwordHash())) {
+            // 自动对齐：配置算法与存储算法不一致时，登录成功后用配置算法重新哈希
+            String configured = configManager.passwordHashAlgorithm();
+            boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
+            boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
+            if (configIsBcrypt != storedIsBcrypt) {
+                String newHash = PasswordHash.hashPassword(password, configured);
+                data.passwordHash(newHash);
+                dataManager.updatePassword(uuid, newHash);
+            }
             data.lastLogin(System.currentTimeMillis() / 1000);
             if (player.getAddress() != null) {
                 data.ip(player.getAddress().getAddress().getHostAddress());
             }
-            dataManager.save();
+            dataManager.save(uuid);
 
             loggedIn.add(uuid);
             pendingLogin.remove(uuid);
@@ -87,7 +106,7 @@ public final class AuthManager {
         if (data == null) return false;
 
         if (PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
-            String newHash = PasswordHash.hashPassword(newPassword);
+            String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
             dataManager.updatePassword(uuid, newHash);
             return true;
         }
@@ -137,5 +156,117 @@ public final class AuthManager {
         if (until == null) return 0;
         long remaining = until - System.currentTimeMillis();
         return remaining > 0 ? remaining / 1000 : 0;
+    }
+
+    // ===== 坐标保护相关 =====
+
+    /**
+     * 保存玩家当前退出位置（仅已登录玩家退出时调用）。
+     * 未登录玩家退出不会更新位置，保持上次保存的位置不变。
+     */
+    public void saveLogoutLocation(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data != null) {
+            data.logoutLocation(PlayerDataManager.serializeLocation(player.getLocation()));
+            dataManager.save(player.getUniqueId());
+        }
+    }
+
+    /**
+     * 登录/注册成功后，传送回上次退出位置。
+     * 如果没有保存的位置（新玩家），不传送（留在世界出生点）。
+     * 仅在启用坐标保护时生效。
+     * 使用 teleportAsync 以兼容 Folia（Folia 禁止同步 teleport）。
+     * 传送后延迟 2 tick 恢复伤害，防止传送前瞬间受伤。
+     */
+    public void returnToLogoutLocation(Player player) {
+        if (!configManager.protectionPosEnabled()) return;
+        Location loc = getLogoutLocation(player);
+        if (loc == null) {
+            // 新玩家没有保存的位置，留在世界出生点
+            return;
+        }
+        // 标记传送过渡期，保持无敌
+        invulnerablePending.add(player.getUniqueId());
+        player.teleportAsync(loc).thenAccept(success -> {
+            if (success) {
+                // 传送成功后延迟 2 tick 移除无敌（40ms × 2 = 100ms 缓冲）
+                player.getScheduler().runDelayed(plugin, task ->
+                        invulnerablePending.remove(player.getUniqueId()), null, 2L);
+            } else {
+                invulnerablePending.remove(player.getUniqueId());
+            }
+        });
+    }
+
+    /** 玩家是否处于传送过渡期（已登录但还在传送，应保持无敌） */
+    public boolean isInvulnerablePending(Player player) {
+        return invulnerablePending.contains(player.getUniqueId());
+    }
+
+    /**
+     * 传送到主世界出生点周围随机安全位置（登出时调用）。
+     * 仅在启用坐标保护时生效。
+     * 强制使用主世界，防止玩家当前所在维度信息泄露。
+     * 在异步线程寻找安全位置（阻塞式），完成后用 teleportAsync 传送（兼容 Folia）。
+     */
+    public void teleportToAuthLocation(Player player) {
+        if (!configManager.protectionPosEnabled()) return;
+        World world = Bukkit.getWorlds().get(0);
+        // 切到异步线程寻找安全位置，避免阻塞命令线程
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            Location loc = findSafeAuthSpawn(world);
+            player.teleportAsync(loc);
+        });
+    }
+
+    /**
+     * 在主世界出生点周围寻找能立足的随机位置（老玩家专用）。
+     * 安全标准放宽：只需"下方固体方块"（能站立）。
+     * 因为未登录期间 onDamage 取消伤害，玩家不会因悬空/水中/岩浆受伤；
+     * 登录后立即传送到上次退出位置，离开临时位置。
+     * 默认尝试 10 次，全部失败则回退到世界出生点（玩家无敌，出生点不安全也不会死）。
+     * 此方法会阻塞等待区块加载，应在异步线程中调用。
+     */
+    public Location findSafeAuthSpawn(World world) {
+        Location spawn = world.getSpawnLocation();
+        int radius = configManager.protectionPosSpawnRadius();
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        // 多次重试，模仿原版 MC 寻找安全出生点的机制
+        for (int attempt = 0; attempt < 10; attempt++) {
+            int x = (int) (spawn.getX() + (random.nextDouble() * 2 - 1) * radius);
+            int z = (int) (spawn.getZ() + (random.nextDouble() * 2 - 1) * radius);
+            // 阻塞等待区块加载（调用方应在异步线程）
+            org.bukkit.Chunk chunk = world.getChunkAtAsyncUrgently(x >> 4, z >> 4).join();
+            int y = findSafeSpawnY(chunk.getChunkSnapshot(), x & 15, z & 15, world);
+            if (y != Integer.MIN_VALUE) {
+                return new Location(world, x + 0.5, y, z + 0.5);
+            }
+        }
+        // 全部失败：回退到世界出生点（玩家无敌期间不会受伤）
+        return spawn;
+    }
+
+    /**
+     * 从最高方块上方开始向下找能立足的 y 坐标。
+     * 安全标准：下方是固体方块（能站立）。
+     * 找不到时返回 Integer.MIN_VALUE，由调用方重试或回退。
+     */
+    private static int findSafeSpawnY(org.bukkit.ChunkSnapshot snapshot, int x, int z, World world) {
+        int highestY = snapshot.getHighestBlockYAt(x, z);
+        // 最高方块上方即视为可立足（下方=最高方块，只需检查它是否固体）
+        if (highestY > world.getMinHeight()) {
+            BlockData below = snapshot.getBlockData(x, highestY, z);
+            if (below.getMaterial().isSolid()) {
+                return highestY + 1;
+            }
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    private Location getLogoutLocation(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data == null) return null;
+        return PlayerDataManager.deserializeLocation(data.logoutLocation());
     }
 }

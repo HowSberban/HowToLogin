@@ -29,7 +29,10 @@ public final class LogoutCommand implements BasicCommand {
             return;
         }
 
+        // 登出流程：先保存当前位置（下次登录回到这里）→ 进入待登录状态 → 传送到认证位置
+        authManager.saveLogoutLocation(player);
         authManager.logout(player);
+        authManager.teleportToAuthLocation(player);
         player.sendMessage(HTLogin.legacy(I18n.get("logout.success")));
     }
 }

@@ -48,6 +48,8 @@ public final class LoginCommand implements BasicCommand {
 
         if (authManager.login(player, args[0])) {
             player.sendMessage(HTLogin.legacy(I18n.get("login.success")));
+            // 登录成功后传送回上次退出位置（启用坐标保护时生效）
+            authManager.returnToLogoutLocation(player);
         } else {
             if (authManager.isLocked(player)) {
                 // 这次失败触发了锁定

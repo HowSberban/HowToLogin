@@ -1,10 +1,10 @@
 package org.HowToLogin.plugin.listener;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
+import io.papermc.paper.event.player.AsyncPlayerSpawnLocationEvent;
 import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.I18n;
 import org.HowToLogin.plugin.auth.AuthManager;
-import org.HowToLogin.plugin.util.FoliaHelper;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -13,8 +13,11 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.FoodLevelChangeEvent;
 import org.bukkit.event.player.*;
+
+import java.util.Locale;
 
 public final class PlayerListener implements Listener {
 
@@ -39,24 +42,51 @@ public final class PlayerListener implements Listener {
         }
     }
 
+    /**
+     * 在 JoinGamePacket 发送前修改老玩家 spawn 位置为主世界出生点周围随机位置，
+     * 从根本上防止 player data 中的退出位置泄露给客户端（F3、小地图 mod 等）。
+     * 新玩家不干预，保留原版出生机制（无泄露风险）。
+     * 此事件在 configuration phase 触发（异步线程），玩家尚未真正加入世界。
+     * 强制使用主世界，防止玩家上次退出维度（下界/末地）信息泄露。
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onSpawnLocation(AsyncPlayerSpawnLocationEvent event) {
+        if (!plugin.getConfigManager().protectionPosEnabled()) return;
+
+        // 新玩家不干预，保留原版出生机制
+        if (event.isNewPlayer()) return;
+
+        // 老玩家：强制主世界随机位置，防止坐标泄露
+        org.bukkit.World world = org.bukkit.Bukkit.getWorlds().get(0);
+        Location safeSpawn = authManager.findSafeAuthSpawn(world);
+        event.setSpawnLocation(safeSpawn);
+    }
+
     private void scheduleLoginTimeout(Player player) {
         int timeout = plugin.getConfigManager().loginTimeout();
         if (timeout <= 0) return;
 
         // 20 tick = 1 秒
         long delayTicks = timeout * 20L;
-        FoliaHelper.runEntityDelayed(plugin, player, p -> {
-            if (!authManager.isLoggedIn(p) && p.isOnline()) {
+        // Paper 1.20+ 统一调度器 API，兼容 Folia（在实体所在区域调度）
+        player.getScheduler().runDelayed(plugin, scheduledTask -> {
+            if (!authManager.isLoggedIn(player) && player.isOnline()) {
                 if (plugin.getConfigManager().kickOnTimeout()) {
-                    p.kick(HTLogin.legacy(I18n.get("listener.login_timeout")));
+                    player.kick(HTLogin.legacy(I18n.get("listener.login_timeout")));
                 }
             }
-        }, delayTicks);
+        }, null, delayTicks);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onQuit(PlayerQuitEvent event) {
-        authManager.clearSession(event.getPlayer());
+        Player player = event.getPlayer();
+        // 已登录玩家退出时保存退出位置（用于下次登录后传送回来）
+        // 未登录玩家退出不更新位置，保持上次保存的位置不变
+        if (authManager.isLoggedIn(player)) {
+            authManager.saveLogoutLocation(player);
+        }
+        authManager.clearSession(player);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
@@ -111,10 +141,13 @@ public final class PlayerListener implements Listener {
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
 
-        // 未登录/未注册玩家只能使用登录/注册相关命令
-        String msg = event.getMessage().toLowerCase();
-        if (msg.startsWith("/login") || msg.startsWith("/l ") || msg.equals("/l")
-                || msg.startsWith("/register") || msg.startsWith("/reg ") || msg.equals("/reg")) {
+        // 提取命令名（去掉前导 / 和参数），统一小写匹配
+        String message = event.getMessage();
+        if (message.startsWith("/")) message = message.substring(1);
+        String commandName = message.split(" ", 2)[0].toLowerCase(Locale.ROOT);
+
+        // 白名单内的命令允许执行
+        if (plugin.getConfigManager().commandWhitelist().contains(commandName)) {
             return;
         }
 
@@ -140,8 +173,20 @@ public final class PlayerListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onDamage(EntityDamageEvent event) {
-        if (plugin.getConfigManager().preventWorldInteraction()
-                && event.getEntity() instanceof Player player
+        if (!plugin.getConfigManager().preventWorldInteraction()) return;
+        if (event.getEntity() instanceof Player player) {
+            // 未登录玩家或传送过渡期玩家不受伤害
+            if (!authManager.isLoggedIn(player) || authManager.isInvulnerablePending(player)) {
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    // 阻止怪物锁定未登录玩家（怪物不会朝玩家移动或试图攻击）
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onEntityTarget(EntityTargetEvent event) {
+        if (!plugin.getConfigManager().preventWorldInteraction()) return;
+        if (event.getTarget() instanceof Player player
                 && !authManager.isLoggedIn(player)) {
             event.setCancelled(true);
         }
