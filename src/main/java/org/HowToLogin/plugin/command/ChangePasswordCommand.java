@@ -27,12 +27,12 @@ public final class ChangePasswordCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.must_login")));
+            player.sendMessage(HTLogin.legacy(I18n.get("changepw.must_login", player)));
             return;
         }
 
         if (args.length < 2) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.usage")));
+            player.sendMessage(HTLogin.legacy(I18n.get("changepw.usage", player)));
             return;
         }
 
@@ -43,14 +43,14 @@ public final class ChangePasswordCommand implements BasicCommand {
         int maxLen = plugin.getConfigManager().maxPasswordLength();
 
         if (newPassword.length() < minLen || newPassword.length() > maxLen) {
-            player.sendMessage(HTLogin.legacy(I18n.get("command.password_length", minLen, maxLen)));
+            player.sendMessage(HTLogin.legacy(I18n.get("command.password_length", player, minLen, maxLen)));
             return;
         }
 
         if (authManager.changePassword(player, oldPassword, newPassword)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.success")));
+            player.sendMessage(HTLogin.legacy(I18n.get("changepw.success", player)));
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.incorrect_old")));
+            player.sendMessage(HTLogin.legacy(I18n.get("changepw.incorrect_old", player)));
         }
     }
 }

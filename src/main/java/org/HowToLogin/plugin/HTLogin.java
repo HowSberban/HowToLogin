@@ -18,11 +18,13 @@ public final class HTLogin extends JavaPlugin {
     private ConfigManager configManager;
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
+    private PlayerListener playerListener;
 
     @Override
     public void onEnable() {
-        this.configManager = new ConfigManager(this);
+        // I18n 必须先初始化：ConfigManager 在检测到配置版本不匹配时会调用 I18n.reload()
         I18n.init(this);
+        this.configManager = new ConfigManager(this);
         this.playerDataManager = new PlayerDataManager(this);
         this.authManager = new AuthManager(this, playerDataManager, configManager);
 
@@ -54,18 +56,31 @@ public final class HTLogin extends JavaPlugin {
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
-            commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
+            commands.register("logout", "退出登录", List.of(), new LogoutCommand(this, authManager));
             commands.register("unregister", "删除账号（管理员）", List.of(), new UnregisterCommand(authManager));
             commands.register("htlogin", "插件管理命令", List.of(), new HTLoginCommand(this));
         });
     }
 
     private void registerListeners() {
-        getServer().getPluginManager().registerEvents(new PlayerListener(this, authManager), this);
+        playerListener = new PlayerListener(this, authManager);
+        getServer().getPluginManager().registerEvents(playerListener, this);
     }
 
     public ConfigManager getConfigManager() {
         return configManager;
+    }
+
+    public PlayerDataManager getPlayerDataManager() {
+        return playerDataManager;
+    }
+
+    public PlayerListener getPlayerListener() {
+        return playerListener;
+    }
+
+    public AuthManager getAuthManager() {
+        return authManager;
     }
 
     /** 将旧版 '&' 颜色代码转换为 Adventure Component */

@@ -25,38 +25,38 @@ public final class LoginCommand implements BasicCommand {
         }
 
         if (authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.already_logged_in")));
+            player.sendMessage(HTLogin.legacy(I18n.get("login.already_logged_in", player)));
             return;
         }
 
         if (!authManager.hasAccount(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.no_account")));
+            player.sendMessage(HTLogin.legacy(I18n.get("login.no_account", player)));
             return;
         }
 
         if (args.length < 1) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.usage")));
+            player.sendMessage(HTLogin.legacy(I18n.get("login.usage", player)));
             return;
         }
 
-        // 锁定检查：优先于密码验证
-        if (authManager.isLocked(player)) {
-            long remaining = authManager.getLockRemaining(player);
-            player.sendMessage(HTLogin.legacy(I18n.get("login.locked", remaining)));
+        // 踢出期检查：优先于密码验证
+        if (authManager.isKicked(player)) {
+            long remaining = authManager.getKickRemaining(player);
+            player.kick(HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
             return;
         }
 
         if (authManager.login(player, args[0])) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.success")));
+            player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
             // 登录成功后传送回上次退出位置（启用坐标保护时生效）
             authManager.returnToLogoutLocation(player);
         } else {
-            if (authManager.isLocked(player)) {
-                // 这次失败触发了锁定
-                long remaining = authManager.getLockRemaining(player);
-                player.sendMessage(HTLogin.legacy(I18n.get("login.locked", remaining)));
+            if (authManager.isKicked(player)) {
+                // 这次失败达到上限，触发踢出
+                long remaining = authManager.getKickRemaining(player);
+                player.kick(HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
             } else {
-                player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password")));
+                player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
             }
         }
     }

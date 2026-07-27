@@ -26,9 +26,9 @@ public final class AuthManager {
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
-    // 暴力破解防护：记录失败次数和锁定到期时间
+    // 暴力破解防护：记录失败次数和踢出到期时间
     private final Map<UUID, Integer> failedAttempts = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> lockUntil = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> kickUntil = new ConcurrentHashMap<>();
 
     public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
         this.plugin = plugin;
@@ -52,8 +52,8 @@ public final class AuthManager {
     // Login
     public boolean login(Player player, String password) {
         UUID uuid = player.getUniqueId();
-        // 锁定期间拒绝登录
-        if (isLocked(player)) return false;
+        // 踢出期内拒绝登录
+        if (isKicked(player)) return false;
 
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
@@ -78,18 +78,80 @@ public final class AuthManager {
             pendingLogin.remove(uuid);
             // 登录成功，清零失败计数
             failedAttempts.remove(uuid);
-            lockUntil.remove(uuid);
+            kickUntil.remove(uuid);
             return true;
         }
 
-        // 登录失败，增加计数
-        int attempts = failedAttempts.merge(uuid, 1, Integer::sum);
-        if (attempts >= configManager.maxLoginAttempts()) {
-            // 达到阈值，设置锁定
-            lockUntil.put(uuid, System.currentTimeMillis() + configManager.lockDuration() * 1000L);
-            failedAttempts.remove(uuid);
+        // 登录失败，增加计数（仅在启用失败保护时）
+        if (configManager.failProtectionEnabled()) {
+            int attempts = failedAttempts.merge(uuid, 1, Integer::sum);
+            if (attempts >= configManager.failMaxAttempts()) {
+                // 达到阈值，设置踢出期
+                kickUntil.put(uuid, System.currentTimeMillis() + configManager.failKickDuration() * 1000L);
+                failedAttempts.remove(uuid);
+            }
         }
         return false;
+    }
+
+    // ===== 管理员强制操作 =====
+
+    /** 强制登出玩家（无需玩家在线，清除登录状态） */
+    public boolean forceLogout(UUID uuid) {
+        if (!loggedIn.remove(uuid)) return false;
+        pendingLogin.add(uuid);
+        return true;
+    }
+
+    /** 强制修改玩家密码（无需验证旧密码，玩家无需在线） */
+    public boolean forceChangePassword(UUID uuid, String newPassword) {
+        if (!dataManager.hasAccount(uuid)) return false;
+        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
+        dataManager.updatePassword(uuid, newHash);
+        // 若玩家在线，强制下线让其重新登录
+        return true;
+    }
+
+    /** 强制登录玩家（不管有没有账号，仅对在线玩家生效） */
+    public boolean forceLogin(Player player) {
+        UUID uuid = player.getUniqueId();
+        loggedIn.add(uuid);
+        pendingLogin.remove(uuid);
+        failedAttempts.remove(uuid);
+        kickUntil.remove(uuid);
+        return true;
+    }
+
+    // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
+    public boolean checkIpAutoLogin(Player player) {
+        if (!configManager.ipAutoLoginEnabled()) return false;
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) return false;
+        if (player.getAddress() == null) return false;
+        String storedIp = data.ip();
+        if (storedIp == null || storedIp.isEmpty()) return false;
+        if (!player.getAddress().getAddress().getHostAddress().equals(storedIp)) return false;
+        // 检查失效时间：0 表示永不失效
+        int expireMinutes = configManager.ipAutoLoginExpireMinutes();
+        if (expireMinutes <= 0) return true;
+        long lastLogin = data.lastLogin();
+        if (lastLogin <= 0) return false;
+        long expireMillis = expireMinutes * 60L * 1000L;
+        return System.currentTimeMillis() - lastLogin * 1000L < expireMillis;
+    }
+
+    // 通过 IP 免密登录：跳过密码验证，直接标记为已登录
+    public void loginByIp(Player player) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) return;
+        data.lastLogin(System.currentTimeMillis() / 1000);
+        dataManager.save(uuid);
+        loggedIn.add(uuid);
+        pendingLogin.remove(uuid);
+        failedAttempts.remove(uuid);
+        kickUntil.remove(uuid);
     }
 
     // Logout
@@ -120,7 +182,7 @@ public final class AuthManager {
         loggedIn.remove(uuid);
         pendingLogin.remove(uuid);
         failedAttempts.remove(uuid);
-        lockUntil.remove(uuid);
+        kickUntil.remove(uuid);
         return true;
     }
 
@@ -144,15 +206,16 @@ public final class AuthManager {
         pendingLogin.add(player.getUniqueId());
     }
 
-    // 暴力破解防护：检查是否被锁定
-    public boolean isLocked(Player player) {
-        Long until = lockUntil.get(player.getUniqueId());
+    // 暴力破解防护：检查是否处于踢出期
+    public boolean isKicked(Player player) {
+        if (!configManager.failProtectionEnabled()) return false;
+        Long until = kickUntil.get(player.getUniqueId());
         return until != null && until > System.currentTimeMillis();
     }
 
-    // 获取剩余锁定时间（秒）
-    public long getLockRemaining(Player player) {
-        Long until = lockUntil.get(player.getUniqueId());
+    // 获取剩余踢出时间（秒）
+    public long getKickRemaining(Player player) {
+        Long until = kickUntil.get(player.getUniqueId());
         if (until == null) return 0;
         long remaining = until - System.currentTimeMillis();
         return remaining > 0 ? remaining / 1000 : 0;

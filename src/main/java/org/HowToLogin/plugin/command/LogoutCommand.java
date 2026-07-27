@@ -10,9 +10,11 @@ import org.bukkit.entity.Player;
 
 public final class LogoutCommand implements BasicCommand {
 
+    private final HTLogin plugin;
     private final AuthManager authManager;
 
-    public LogoutCommand(AuthManager authManager) {
+    public LogoutCommand(HTLogin plugin, AuthManager authManager) {
+        this.plugin = plugin;
         this.authManager = authManager;
     }
 
@@ -25,7 +27,7 @@ public final class LogoutCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("logout.not_logged_in")));
+            player.sendMessage(HTLogin.legacy(I18n.get("logout.not_logged_in", player)));
             return;
         }
 
@@ -33,6 +35,8 @@ public final class LogoutCommand implements BasicCommand {
         authManager.saveLogoutLocation(player);
         authManager.logout(player);
         authManager.teleportToAuthLocation(player);
-        player.sendMessage(HTLogin.legacy(I18n.get("logout.success")));
+        player.sendMessage(HTLogin.legacy(I18n.get("logout.success", player)));
+        // 登出后重新启动登录提示
+        plugin.getPlayerListener().scheduleReminder(player, true);
     }
 }

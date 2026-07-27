@@ -11,6 +11,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
@@ -29,17 +30,71 @@ public final class PlayerListener implements Listener {
         this.authManager = authManager;
     }
 
+    // 在玩家加入世界前拦截踢出期玩家，避免 PlayerJoinEvent 中 kick 触发 chunk loader 异常
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onLogin(PlayerLoginEvent event) {
+        Player player = event.getPlayer();
+        if (authManager.isKicked(player)) {
+            long remaining = authManager.getKickRemaining(player);
+            event.disallow(PlayerLoginEvent.Result.KICK_BANNED,
+                    HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
+        }
+    }
+
     @EventHandler(priority = EventPriority.LOWEST)
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
         if (authManager.hasAccount(player)) {
+            // 尝试 IP 免密登录：上次登录 IP 与当前一致时自动登录
+            if (authManager.checkIpAutoLogin(player)) {
+                authManager.loginByIp(player);
+                player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
+                // 登录后传送回上次退出位置（坐标保护模式下生效）
+                authManager.returnToLogoutLocation(player);
+                return;
+            }
             authManager.addPendingLogin(player);
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login")));
+            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
             scheduleLoginTimeout(player);
+            scheduleReminder(player, true);
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register")));
+            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
+            scheduleReminder(player, false);
         }
+    }
+
+    /**
+     * 周期性重发登录/注册提示，防止玩家没看到。
+     * 任务自管理：玩家登录/注册成功或下线后自动取消。
+     * @param needsLogin true = 发送登录提示，false = 发送注册提示
+     */
+    public void scheduleReminder(Player player, boolean needsLogin) {
+        int interval = plugin.getConfigManager().loginRemindInterval();
+        if (interval <= 0) return;
+        long periodTicks = interval * 20L;
+        // Paper 1.20+ 统一调度器 API，兼容 Folia
+        player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
+            if (!player.isOnline()) {
+                scheduledTask.cancel();
+                return;
+            }
+            if (needsLogin) {
+                // 已登录则停止提醒
+                if (authManager.isLoggedIn(player)) {
+                    scheduledTask.cancel();
+                    return;
+                }
+                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
+            } else {
+                // 已注册则停止提醒
+                if (authManager.hasAccount(player)) {
+                    scheduledTask.cancel();
+                    return;
+                }
+                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
+            }
+        }, null, periodTicks, periodTicks);
     }
 
     /**
@@ -72,7 +127,7 @@ public final class PlayerListener implements Listener {
         player.getScheduler().runDelayed(plugin, scheduledTask -> {
             if (!authManager.isLoggedIn(player) && player.isOnline()) {
                 if (plugin.getConfigManager().kickOnTimeout()) {
-                    player.kick(HTLogin.legacy(I18n.get("listener.login_timeout")));
+                    player.kick(HTLogin.legacy(I18n.get("listener.login_timeout", player)));
                 }
             }
         }, null, delayTicks);
@@ -130,7 +185,7 @@ public final class PlayerListener implements Listener {
         Player player = event.getPlayer();
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login")));
+            player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login", player)));
         }
     }
 
@@ -152,7 +207,7 @@ public final class PlayerListener implements Listener {
         }
 
         event.setCancelled(true);
-        player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login")));
+        player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login", player)));
     }
 
     @EventHandler(priority = EventPriority.LOWEST)

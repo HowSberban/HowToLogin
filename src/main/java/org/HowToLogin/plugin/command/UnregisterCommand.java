@@ -7,6 +7,7 @@ import org.HowToLogin.plugin.I18n;
 import org.HowToLogin.plugin.auth.AuthManager;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.command.CommandSender;
 
 public final class UnregisterCommand implements BasicCommand {
 
@@ -18,8 +19,9 @@ public final class UnregisterCommand implements BasicCommand {
 
     @Override
     public void execute(CommandSourceStack stack, String[] args) {
+        CommandSender sender = stack.getSender();
         if (args.length < 1) {
-            stack.getSender().sendMessage(HTLogin.legacy(I18n.get("unregister.usage")));
+            sender.sendMessage(HTLogin.legacy(I18n.get("unregister.usage", sender)));
             return;
         }
 
@@ -28,11 +30,11 @@ public final class UnregisterCommand implements BasicCommand {
         OfflinePlayer target = Bukkit.getOfflinePlayerIfCached(args[0]);
 
         if (target == null || !authManager.unregister(target.getUniqueId())) {
-            stack.getSender().sendMessage(HTLogin.legacy(I18n.get("unregister.not_found")));
+            sender.sendMessage(HTLogin.legacy(I18n.get("unregister.not_found", sender)));
             return;
         }
 
-        stack.getSender().sendMessage(HTLogin.legacy(I18n.get("unregister.success", args[0])));
+        sender.sendMessage(HTLogin.legacy(I18n.get("unregister.success", sender, args[0])));
     }
 
     @Override

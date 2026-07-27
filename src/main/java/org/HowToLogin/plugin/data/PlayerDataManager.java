@@ -181,6 +181,14 @@ public final class PlayerDataManager {
         return players.get(uuid);
     }
 
+    /** 查找指定 IP 下的所有账号（用于管理员排查多账号） */
+    public java.util.List<PlayerData> findByIp(String ip) {
+        if (ip == null || ip.isEmpty()) return java.util.List.of();
+        return players.values().stream()
+                .filter(d -> ip.equals(d.ip()))
+                .toList();
+    }
+
     public void createPlayer(UUID uuid, String passwordHash, String ip) {
         PlayerData data = new PlayerData(uuid, passwordHash, ip, System.currentTimeMillis() / 1000, null);
         players.put(uuid, data);

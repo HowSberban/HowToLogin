@@ -27,12 +27,12 @@ public final class RegisterCommand implements BasicCommand {
         }
 
         if (args.length < 2) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.usage")));
+            player.sendMessage(HTLogin.legacy(I18n.get("register.usage", player)));
             return;
         }
 
         if (authManager.hasAccount(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.already_registered")));
+            player.sendMessage(HTLogin.legacy(I18n.get("register.already_registered", player)));
             return;
         }
 
@@ -40,7 +40,7 @@ public final class RegisterCommand implements BasicCommand {
         String confirm = args[1];
 
         if (!password.equals(confirm)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.password_mismatch")));
+            player.sendMessage(HTLogin.legacy(I18n.get("register.password_mismatch", player)));
             return;
         }
 
@@ -48,16 +48,16 @@ public final class RegisterCommand implements BasicCommand {
         int maxLen = plugin.getConfigManager().maxPasswordLength();
 
         if (password.length() < minLen || password.length() > maxLen) {
-            player.sendMessage(HTLogin.legacy(I18n.get("command.password_length", minLen, maxLen)));
+            player.sendMessage(HTLogin.legacy(I18n.get("command.password_length", player, minLen, maxLen)));
             return;
         }
 
         if (authManager.register(player, password)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.success")));
+            player.sendMessage(HTLogin.legacy(I18n.get("register.success", player)));
             // 注册成功后传送到默认世界 spawn（启用坐标保护时生效）
             authManager.returnToLogoutLocation(player);
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.failed")));
+            player.sendMessage(HTLogin.legacy(I18n.get("register.failed", player)));
         }
     }
 }

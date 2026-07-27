@@ -1,5 +1,8 @@
 # HTLogin 配置文件
 
+# 配置文件版本，请勿修改
+version: ${configVersion}
+
 # 数据库设置
 database:
   # 数据库类型：sqlite 或 mysql
@@ -25,10 +28,21 @@ login:
   timeout: 120
   # 超时未登录是否踢出玩家
   kick-on-timeout: true
-  # 连续登录失败次数上限，超过后锁定
-  max-attempts: 5
-  # 锁定时长（秒）
-  lock-duration: 300
+  # 登录失败保护
+  fail-protection:
+    enabled: true
+    # 连续登录失败次数上限，超过后踢出
+    max-attempts: 3
+    # 踢出时长（秒），期间无法再次进服
+    kick-duration: 60
+  # 提示消息重复发送间隔（秒），0 = 仅发送一次
+  remind-interval: 5
+  # IP 免密登录：上次登录 IP 与当前一致时自动登录
+  ip-auto-login:
+    enabled: true
+    # 失效时间（分钟），超过此时间后需重新输入密码
+    # 0 = 永不失效
+    expire-minutes: 120
 
 # 密码规则
 password:
@@ -52,9 +66,7 @@ prevent:
   chat: true
   # 禁止执行非白名单命令
   command:
-    # 是否启用
     enabled: true
-    # 未登录时允许执行的命令
     whitelist:
       - login
       - l
@@ -65,9 +77,17 @@ prevent:
 
 # 登录前保护
 protection:
-  # 坐标保护（未登录时在主世界出生点周围随机位置等待，登录后传送回上次退出位置）
+  # 坐标保护（未登录时在主世界出生点周围随机位置等待，登录后传送回上次退出位置
+  # 与CatSeedLogin不同，开启此保护不会导致玩家位置丢失）
   pos:
-    # 是否启用
     enabled: false
     # 在世界出生点周围的随机半径（方块数），每次加入位置不同，避免玩家堆积
     spawn-radius: 10
+
+# 通用设置
+settings:
+  # 默认语言
+  # 可在插件 lang/ 目录添加 <语言>.properties 支持更多语言
+  default-language: zh_CN
+  # 是否根据客户端语言自动匹配消息（关闭则所有玩家使用默认语言）
+  i18n: true
