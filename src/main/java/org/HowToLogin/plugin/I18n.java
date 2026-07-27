@@ -8,7 +8,6 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.HashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
@@ -90,17 +89,9 @@ public final class I18n {
         }
     }
 
-    public static String defaultLocale() {
-        return defaultLocale;
-    }
-
     /** 设置是否启用客户端语言检测（关闭后所有玩家消息使用默认语言） */
     public static void setClientLanguageDetection(boolean enabled) {
         clientLanguageDetection = enabled;
-    }
-
-    public static boolean clientLanguageDetection() {
-        return clientLanguageDetection;
     }
 
     // ===== 默认语言（控制台日志用） =====

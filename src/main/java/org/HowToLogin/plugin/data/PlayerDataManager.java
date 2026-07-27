@@ -125,11 +125,6 @@ public final class PlayerDataManager {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> upsertSync(data));
     }
 
-    /** 异步全量保存所有玩家数据 */
-    public void save() {
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> saveAllSync());
-    }
-
     /** 同步全量保存，用于 onDisable（必须在关服前完成） */
     public void saveSync() {
         saveAllSync();

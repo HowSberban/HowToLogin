@@ -128,8 +128,9 @@ public final class ConfigManager {
         this.mysqlPassword = config.getString("database.mysql.password", "");
         // 连接参数保持顺序，便于拼接 URL
         this.mysqlParams = new LinkedHashMap<>();
-        if (config.isConfigurationSection("database.mysql.params")) {
-            for (String key : config.getConfigurationSection("database.mysql.params").getKeys(false)) {
+        var paramsSection = config.getConfigurationSection("database.mysql.params");
+        if (paramsSection != null) {
+            for (String key : paramsSection.getKeys(false)) {
                 this.mysqlParams.put(key, config.getString("database.mysql.params." + key, ""));
             }
         }
@@ -215,10 +216,6 @@ public final class ConfigManager {
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }
     public int protectionPosSpawnRadius() { return protectionPosSpawnRadius; }
-
-    // 通用设置
-    public String defaultLanguage() { return defaultLanguage; }
-    public boolean clientLanguageDetection() { return clientLanguageDetection; }
 
     /** 取版本号前两位（major.minor），patch 版本仅修 bug 不影响配置结构 */
     private static String majorMinor(String version) {

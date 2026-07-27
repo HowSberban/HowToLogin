@@ -113,13 +113,12 @@ public final class AuthManager {
     }
 
     /** 强制登录玩家（不管有没有账号，仅对在线玩家生效） */
-    public boolean forceLogin(Player player) {
+    public void forceLogin(Player player) {
         UUID uuid = player.getUniqueId();
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
-        return true;
     }
 
     // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
@@ -208,14 +207,22 @@ public final class AuthManager {
 
     // 暴力破解防护：检查是否处于踢出期
     public boolean isKicked(Player player) {
+        return isKicked(player.getUniqueId());
+    }
+
+    public boolean isKicked(UUID uuid) {
         if (!configManager.failProtectionEnabled()) return false;
-        Long until = kickUntil.get(player.getUniqueId());
+        Long until = kickUntil.get(uuid);
         return until != null && until > System.currentTimeMillis();
     }
 
     // 获取剩余踢出时间（秒）
     public long getKickRemaining(Player player) {
-        Long until = kickUntil.get(player.getUniqueId());
+        return getKickRemaining(player.getUniqueId());
+    }
+
+    public long getKickRemaining(UUID uuid) {
+        Long until = kickUntil.get(uuid);
         if (until == null) return 0;
         long remaining = until - System.currentTimeMillis();
         return remaining > 0 ? remaining / 1000 : 0;
@@ -243,23 +250,24 @@ public final class AuthManager {
      * 传送后延迟 2 tick 恢复伤害，防止传送前瞬间受伤。
      */
     public void returnToLogoutLocation(Player player) {
-        if (!configManager.protectionPosEnabled()) return;
-        Location loc = getLogoutLocation(player);
-        if (loc == null) {
-            // 新玩家没有保存的位置，留在世界出生点
-            return;
-        }
-        // 标记传送过渡期，保持无敌
-        invulnerablePending.add(player.getUniqueId());
-        player.teleportAsync(loc).thenAccept(success -> {
-            if (success) {
-                // 传送成功后延迟 2 tick 移除无敌（40ms × 2 = 100ms 缓冲）
-                player.getScheduler().runDelayed(plugin, task ->
-                        invulnerablePending.remove(player.getUniqueId()), null, 2L);
-            } else {
-                invulnerablePending.remove(player.getUniqueId());
+        if (configManager.protectionPosEnabled()) {
+            Location loc = getLogoutLocation(player);
+            if (loc == null) {
+                // 新玩家没有保存的位置，留在世界出生点
+                return;
             }
-        });
+            // 标记传送过渡期，保持无敌
+            invulnerablePending.add(player.getUniqueId());
+            player.teleportAsync(loc).thenAccept(success -> {
+                if (success) {
+                    // 传送成功后延迟 2 tick 移除无敌（40ms × 2 = 100ms 缓冲）
+                    player.getScheduler().runDelayed(plugin, task ->
+                            invulnerablePending.remove(player.getUniqueId()), null, 2L);
+                } else {
+                    invulnerablePending.remove(player.getUniqueId());
+                }
+            });
+        }
     }
 
     /** 玩家是否处于传送过渡期（已登录但还在传送，应保持无敌） */
@@ -274,13 +282,14 @@ public final class AuthManager {
      * 在异步线程寻找安全位置（阻塞式），完成后用 teleportAsync 传送（兼容 Folia）。
      */
     public void teleportToAuthLocation(Player player) {
-        if (!configManager.protectionPosEnabled()) return;
-        World world = Bukkit.getWorlds().get(0);
-        // 切到异步线程寻找安全位置，避免阻塞命令线程
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            Location loc = findSafeAuthSpawn(world);
-            player.teleportAsync(loc);
-        });
+        if (configManager.protectionPosEnabled()) {
+            World world = Bukkit.getWorlds().getFirst();
+            // 切到异步线程寻找安全位置，避免阻塞命令线程
+            Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+                Location loc = findSafeAuthSpawn(world);
+                player.teleportAsync(loc);
+            });
+        }
     }
 
     /**

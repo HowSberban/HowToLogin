@@ -25,7 +25,8 @@ dependencies {
 configurations.configureEach {
     resolutionStrategy.force(
             'org.codehaus.plexus:plexus-utils:3.6.1',
-            'org.apache.commons:commons-lang3:3.18.0'
+            'org.apache.commons:commons-lang3:3.18.0',
+            'com.google.protobuf:protobuf-java:3.25.5'
     )
 }
 

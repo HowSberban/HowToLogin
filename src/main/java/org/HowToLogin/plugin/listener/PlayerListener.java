@@ -11,7 +11,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
@@ -31,13 +30,14 @@ public final class PlayerListener implements Listener {
     }
 
     // 在玩家加入世界前拦截踢出期玩家，避免 PlayerJoinEvent 中 kick 触发 chunk loader 异常
+    // 使用 AsyncPlayerPreLoginEvent 替代已弃用的 PlayerLoginEvent（1.21.6+）
     @EventHandler(priority = EventPriority.LOWEST)
-    public void onLogin(PlayerLoginEvent event) {
-        Player player = event.getPlayer();
-        if (authManager.isKicked(player)) {
-            long remaining = authManager.getKickRemaining(player);
-            event.disallow(PlayerLoginEvent.Result.KICK_BANNED,
-                    HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
+    public void onPreLogin(AsyncPlayerPreLoginEvent event) {
+        var uuid = event.getUniqueId();
+        if (authManager.isKicked(uuid)) {
+            long remaining = authManager.getKickRemaining(uuid);
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
+                    HTLogin.legacy(I18n.get("login.kicked", remaining)));
         }
     }
 
@@ -106,15 +106,12 @@ public final class PlayerListener implements Listener {
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSpawnLocation(AsyncPlayerSpawnLocationEvent event) {
-        if (!plugin.getConfigManager().protectionPosEnabled()) return;
-
-        // 新玩家不干预，保留原版出生机制
-        if (event.isNewPlayer()) return;
-
-        // 老玩家：强制主世界随机位置，防止坐标泄露
-        org.bukkit.World world = org.bukkit.Bukkit.getWorlds().get(0);
-        Location safeSpawn = authManager.findSafeAuthSpawn(world);
-        event.setSpawnLocation(safeSpawn);
+        // 新玩家不干预，保留原版出生机制；老玩家强制主世界随机位置防止坐标泄露
+        if (plugin.getConfigManager().protectionPosEnabled() && !event.isNewPlayer()) {
+            org.bukkit.World world = org.bukkit.Bukkit.getWorlds().getFirst();
+            Location safeSpawn = authManager.findSafeAuthSpawn(world);
+            event.setSpawnLocation(safeSpawn);
+        }
     }
 
     private void scheduleLoginTimeout(Player player) {
