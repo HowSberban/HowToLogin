@@ -8,12 +8,7 @@ authors:
 description: A login plugin with Paper API.
 license: GPL-3.0
 folia-supported: true
-# 运行时依赖由 Paper 自动下载到本地缓存，不打包进 jar
-libraries:
-  - org.xerial:sqlite-jdbc:3.46.1.3
-  - com.mysql:mysql-connector-j:8.4.0
-  - com.zaxxer:HikariCP:5.1.0
-  - org.mindrot:jbcrypt:0.4
+loader: org.HowToLogin.plugin.PluginLoaderImpl
 
 permissions:
   htlogin.admin:
