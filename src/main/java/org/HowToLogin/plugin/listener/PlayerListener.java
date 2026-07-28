@@ -208,7 +208,7 @@ public final class PlayerListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
-        if (!plugin.getConfigManager().preventCommand()) return;
+        if (plugin.getConfigManager().preventCommand()) return;
 
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
@@ -302,7 +302,7 @@ public final class PlayerListener implements Listener {
     // 未登录玩家只能补全白名单命令，防止通过 Tab 遍历服务器所有命令
     @EventHandler(priority = EventPriority.LOWEST)
     public void onTabComplete(TabCompleteEvent event) {
-        if (!plugin.getConfigManager().preventCommand()) return;
+        if (plugin.getConfigManager().preventCommand()) return;
         if (!(event.getSender() instanceof Player player)) return;
         if (authManager.isLoggedIn(player)) return;
 
@@ -325,7 +325,7 @@ public final class PlayerListener implements Listener {
     // 容器点击（含创造模式）
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryClick(InventoryClickEvent event) {
-        if (!plugin.getConfigManager().preventInventory()) return;
+        if (plugin.getConfigManager().preventInventory()) return;
         if (event.getWhoClicked() instanceof Player player
                 && !authManager.isLoggedIn(player)) {
             event.setCancelled(true);
@@ -335,7 +335,7 @@ public final class PlayerListener implements Listener {
     // 容器拖拽
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryDrag(InventoryDragEvent event) {
-        if (!plugin.getConfigManager().preventInventory()) return;
+        if (plugin.getConfigManager().preventInventory()) return;
         if (event.getWhoClicked() instanceof Player player
                 && !authManager.isLoggedIn(player)) {
             event.setCancelled(true);
@@ -354,7 +354,7 @@ public final class PlayerListener implements Listener {
     // 物品消耗（进食、喝药水等）
     @EventHandler(priority = EventPriority.LOWEST)
     public void onItemConsume(PlayerItemConsumeEvent event) {
-        if (!plugin.getConfigManager().preventInventory()) return;
+        if (plugin.getConfigManager().preventInventory()) return;
         if (!authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
@@ -363,7 +363,7 @@ public final class PlayerListener implements Listener {
     // 副手切换
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSwapHandItems(PlayerSwapHandItemsEvent event) {
-        if (!plugin.getConfigManager().preventInventory()) return;
+        if (plugin.getConfigManager().preventInventory()) return;
         if (!authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }

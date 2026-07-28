@@ -60,7 +60,7 @@ public final class HTLogin extends JavaPlugin {
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
-            commands.register("logout", "退出登录", List.of(), new LogoutCommand(this, authManager));
+            commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
             commands.register("unregister", "删除账号（管理员）", List.of(), new UnregisterCommand(authManager));
             commands.register("htlogin", "插件管理命令", List.of(), new HTLoginCommand(this));
         });
@@ -77,10 +77,6 @@ public final class HTLogin extends JavaPlugin {
 
     public PlayerDataManager getPlayerDataManager() {
         return playerDataManager;
-    }
-
-    public PlayerListener getPlayerListener() {
-        return playerListener;
     }
 
     public AuthManager getAuthManager() {

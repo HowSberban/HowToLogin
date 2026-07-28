@@ -11,6 +11,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -159,7 +160,7 @@ public final class HTLoginCommand implements BasicCommand {
     }
 
     @Override
-    public List<String> suggest(CommandSourceStack stack, String[] args) {
+    public @NotNull List<String> suggest(@NotNull CommandSourceStack stack, String[] args) {
         List<String> result = new ArrayList<>();
         if (args.length == 1) {
             // 补全子命令名

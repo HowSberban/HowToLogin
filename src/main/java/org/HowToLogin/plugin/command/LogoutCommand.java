@@ -11,11 +11,9 @@ import org.jetbrains.annotations.NotNull;
 
 public final class LogoutCommand implements BasicCommand {
 
-    private final HTLogin plugin;
     private final AuthManager authManager;
 
-    public LogoutCommand(HTLogin plugin, AuthManager authManager) {
-        this.plugin = plugin;
+    public LogoutCommand(AuthManager authManager) {
         this.authManager = authManager;
     }
 

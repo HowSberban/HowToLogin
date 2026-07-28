@@ -217,10 +217,10 @@ public final class ConfigManager {
     public boolean preventMove() { return preventMove; }
     public boolean preventLook() { return preventLook; }
     public boolean preventChat() { return preventChat; }
-    public boolean preventCommand() { return preventCommand; }
+    public boolean preventCommand() { return !preventCommand; }
     public List<String> commandWhitelist() { return commandWhitelist; }
     public boolean preventWorldInteraction() { return preventWorldInteraction; }
-    public boolean preventInventory() { return preventInventory; }
+    public boolean preventInventory() { return !preventInventory; }
 
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }
