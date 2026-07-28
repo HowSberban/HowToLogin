@@ -4,7 +4,6 @@ import org.HowToLogin.plugin.HTLogin;
 import org.HowToLogin.plugin.config.ConfigManager;
 import org.HowToLogin.plugin.data.PlayerDataManager;
 import org.HowToLogin.plugin.data.PlayerDataManager.PlayerData;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.data.BlockData;
@@ -108,7 +107,12 @@ public final class AuthManager {
         if (!dataManager.hasAccount(uuid)) return false;
         String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
         dataManager.updatePassword(uuid, newHash);
-        // 若玩家在线，强制下线让其重新登录
+        // 清除 lastLogin 使 IP 自动登录立即失效，强制下次必须用密码登录
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data != null) {
+            data.lastLogin(0);
+            dataManager.save(uuid);
+        }
         return true;
     }
 
@@ -190,6 +194,8 @@ public final class AuthManager {
         UUID uuid = player.getUniqueId();
         loggedIn.remove(uuid);
         pendingLogin.remove(uuid);
+        // 清除传送过渡期标记，防止下次登录时错误无敌
+        invulnerablePending.remove(uuid);
     }
 
     // Status checks
@@ -198,7 +204,11 @@ public final class AuthManager {
     }
 
     public boolean hasAccount(Player player) {
-        return dataManager.hasAccount(player.getUniqueId());
+        return hasAccount(player.getUniqueId());
+    }
+
+    public boolean hasAccount(UUID uuid) {
+        return dataManager.hasAccount(uuid);
     }
 
     public void addPendingLogin(Player player) {
@@ -226,6 +236,14 @@ public final class AuthManager {
         if (until == null) return 0;
         long remaining = until - System.currentTimeMillis();
         return remaining > 0 ? remaining / 1000 : 0;
+    }
+
+    /** 清理已过期的踢出记录和失败计数（reload 时调用，防止内存泄漏） */
+    public void cleanupExpiredStates() {
+        long now = System.currentTimeMillis();
+        kickUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
+        // 失败计数未达阈值的条目也应清理（玩家可能已离线）
+        failedAttempts.entrySet().removeIf(entry -> entry.getValue() < configManager.failMaxAttempts());
     }
 
     // ===== 坐标保护相关 =====
@@ -273,23 +291,6 @@ public final class AuthManager {
     /** 玩家是否处于传送过渡期（已登录但还在传送，应保持无敌） */
     public boolean isInvulnerablePending(Player player) {
         return invulnerablePending.contains(player.getUniqueId());
-    }
-
-    /**
-     * 传送到主世界出生点周围随机安全位置（登出时调用）。
-     * 仅在启用坐标保护时生效。
-     * 强制使用主世界，防止玩家当前所在维度信息泄露。
-     * 在异步线程寻找安全位置（阻塞式），完成后用 teleportAsync 传送（兼容 Folia）。
-     */
-    public void teleportToAuthLocation(Player player) {
-        if (configManager.protectionPosEnabled()) {
-            World world = Bukkit.getWorlds().getFirst();
-            // 切到异步线程寻找安全位置，避免阻塞命令线程
-            Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-                Location loc = findSafeAuthSpawn(world);
-                player.teleportAsync(loc);
-            });
-        }
     }
 
     /**

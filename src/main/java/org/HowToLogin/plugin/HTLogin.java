@@ -7,8 +7,10 @@ import org.HowToLogin.plugin.auth.AuthManager;
 import org.HowToLogin.plugin.command.*;
 import org.HowToLogin.plugin.config.ConfigManager;
 import org.HowToLogin.plugin.data.PlayerDataManager;
+import org.HowToLogin.plugin.hook.HTLoginExpansion;
 import org.HowToLogin.plugin.listener.PlayerListener;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.List;
@@ -30,6 +32,8 @@ public final class HTLogin extends JavaPlugin {
 
         registerCommands();
         registerListeners();
+        hookPlaceholderAPI();
+        rePendOnlinePlayers();
 
         getLogger().info(I18n.get("plugin.enabled", getPluginMeta().getVersion()));
     }
@@ -81,6 +85,32 @@ public final class HTLogin extends JavaPlugin {
 
     public AuthManager getAuthManager() {
         return authManager;
+    }
+
+    /** PlaceholderAPI 软依赖：存在时注册变量扩展 */
+    private void hookPlaceholderAPI() {
+        if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
+            new HTLoginExpansion(this).register();
+            getLogger().info("PlaceholderAPI 集成已启用");
+        }
+    }
+
+    /**
+     * 处理 /reload 后在线玩家状态丢失：
+     * 插件重启后内存中的登录状态被清空，需重新挂起未登录的在线玩家。
+     */
+    private void rePendOnlinePlayers() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (authManager.isLoggedIn(player)) continue;
+            if (authManager.hasAccount(player)) {
+                authManager.addPendingLogin(player);
+                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
+            } else {
+                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
+            }
+            playerListener.scheduleLoginTimeout(player);
+            playerListener.scheduleReminder(player, authManager.hasAccount(player));
+        }
     }
 
     /** 将旧版 '&' 颜色代码转换为 Adventure Component */

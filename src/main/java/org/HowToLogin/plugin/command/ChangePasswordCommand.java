@@ -7,6 +7,7 @@ import org.HowToLogin.plugin.I18n;
 import org.HowToLogin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 
 public final class ChangePasswordCommand implements BasicCommand {
 
@@ -19,7 +20,7 @@ public final class ChangePasswordCommand implements BasicCommand {
     }
 
     @Override
-    public void execute(CommandSourceStack stack, String[] args) {
+    public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
             sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
@@ -39,13 +40,7 @@ public final class ChangePasswordCommand implements BasicCommand {
         String oldPassword = args[0];
         String newPassword = args[1];
 
-        int minLen = plugin.getConfigManager().minPasswordLength();
-        int maxLen = plugin.getConfigManager().maxPasswordLength();
-
-        if (newPassword.length() < minLen || newPassword.length() > maxLen) {
-            player.sendMessage(HTLogin.legacy(I18n.get("command.password_length", player, minLen, maxLen)));
-            return;
-        }
+        if (PasswordValidator.invalidLength(plugin, player, newPassword)) return;
 
         if (authManager.changePassword(player, oldPassword, newPassword)) {
             player.sendMessage(HTLogin.legacy(I18n.get("changepw.success", player)));

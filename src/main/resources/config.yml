@@ -44,6 +44,11 @@ login:
     # 0 = 永不失效
     expire-minutes: 120
 
+# 注册限制
+register:
+  # 同一 IP 最大账号数量，0 = 不限制
+  max-accounts-per-ip: 0
+
 # 密码规则
 password:
   # 密码最小长度
@@ -74,6 +79,8 @@ prevent:
       - reg
   # 禁止与世界交互
   world-interaction: true
+  # 禁止物品交互
+  inventory: true
 
 # 登录前保护
 protection:

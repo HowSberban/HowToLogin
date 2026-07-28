@@ -15,8 +15,12 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.FoodLevelChangeEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.event.server.TabCompleteEvent;
 
+import java.util.List;
 import java.util.Locale;
 
 public final class PlayerListener implements Listener {
@@ -29,15 +33,29 @@ public final class PlayerListener implements Listener {
         this.authManager = authManager;
     }
 
-    // 在玩家加入世界前拦截踢出期玩家，避免 PlayerJoinEvent 中 kick 触发 chunk loader 异常
+    // 在玩家加入世界前拦截：踢出期玩家、同一 IP 账号数量超限
     // 使用 AsyncPlayerPreLoginEvent 替代已弃用的 PlayerLoginEvent（1.21.6+）
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPreLogin(AsyncPlayerPreLoginEvent event) {
         var uuid = event.getUniqueId();
+
+        // 踢出期内拒绝进入
         if (authManager.isKicked(uuid)) {
             long remaining = authManager.getKickRemaining(uuid);
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
                     HTLogin.legacy(I18n.get("login.kicked", remaining)));
+            return;
+        }
+
+        // 同一 IP 账号数量限制：仅对新玩家（无账号）检查，已注册玩家允许进入
+        int maxAccounts = plugin.getConfigManager().maxAccountsPerIp();
+        if (maxAccounts > 0 && !authManager.hasAccount(uuid)) {
+            String ip = event.getAddress().getHostAddress();
+            int current = plugin.getPlayerDataManager().findByIp(ip).size();
+            if (current >= maxAccounts) {
+                event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                        HTLogin.legacy(I18n.get("register.ip_limit", maxAccounts)));
+            }
         }
     }
 
@@ -60,6 +78,7 @@ public final class PlayerListener implements Listener {
             scheduleReminder(player, true);
         } else {
             player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
+            scheduleLoginTimeout(player);
             scheduleReminder(player, false);
         }
     }
@@ -114,7 +133,8 @@ public final class PlayerListener implements Listener {
         }
     }
 
-    private void scheduleLoginTimeout(Player player) {
+    /** 启动登录超时踢出任务（onJoin 和 logout 共用） */
+    public void scheduleLoginTimeout(Player player) {
         int timeout = plugin.getConfigManager().loginTimeout();
         if (timeout <= 0) return;
 
@@ -273,6 +293,78 @@ public final class PlayerListener implements Listener {
     public void onInteract(PlayerInteractEvent event) {
         if (plugin.getConfigManager().preventWorldInteraction()
                 && !authManager.isLoggedIn(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    // ===== 以下为新增事件监听 =====
+
+    // 未登录玩家只能补全白名单命令，防止通过 Tab 遍历服务器所有命令
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onTabComplete(TabCompleteEvent event) {
+        if (!plugin.getConfigManager().preventCommand()) return;
+        if (!(event.getSender() instanceof Player player)) return;
+        if (authManager.isLoggedIn(player)) return;
+
+        String buffer = event.getBuffer();
+        if (!buffer.startsWith("/")) return;
+
+        // 过滤补全结果：只保留白名单命令
+        List<String> whitelist = plugin.getConfigManager().commandWhitelist();
+        List<String> filtered = event.getCompletions().stream()
+                .filter(c -> {
+                    // 补全结果可能带前导 "/"，统一去掉再匹配
+                    String name = c.startsWith("/") ? c.substring(1) : c;
+                    name = name.split(" ", 2)[0].toLowerCase(Locale.ROOT);
+                    return whitelist.contains(name);
+                })
+                .toList();
+        event.setCompletions(filtered);
+    }
+
+    // 容器点击（含创造模式）
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInventoryClick(InventoryClickEvent event) {
+        if (!plugin.getConfigManager().preventInventory()) return;
+        if (event.getWhoClicked() instanceof Player player
+                && !authManager.isLoggedIn(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    // 容器拖拽
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInventoryDrag(InventoryDragEvent event) {
+        if (!plugin.getConfigManager().preventInventory()) return;
+        if (event.getWhoClicked() instanceof Player player
+                && !authManager.isLoggedIn(player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    // 传送门
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPortal(PlayerPortalEvent event) {
+        if (!plugin.getConfigManager().preventWorldInteraction()) return;
+        if (!authManager.isLoggedIn(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    // 物品消耗（进食、喝药水等）
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onItemConsume(PlayerItemConsumeEvent event) {
+        if (!plugin.getConfigManager().preventInventory()) return;
+        if (!authManager.isLoggedIn(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    // 副手切换
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onSwapHandItems(PlayerSwapHandItemsEvent event) {
+        if (!plugin.getConfigManager().preventInventory()) return;
+        if (!authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
     }

@@ -12,6 +12,7 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public final class HTLoginCommand implements BasicCommand {
@@ -34,6 +35,7 @@ public final class HTLoginCommand implements BasicCommand {
             case "reload" -> {
                 plugin.getConfigManager().reload();
                 I18n.reload();
+                plugin.getAuthManager().cleanupExpiredStates();
                 sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_success", sender)));
                 plugin.getLogger().info(I18n.get("plugin.config_reload_log"));
             }
@@ -85,7 +87,7 @@ public final class HTLoginCommand implements BasicCommand {
         });
     }
 
-    // 强制登出：玩家在线或离线均可（清除登录状态）
+    // 强制登出：玩家在线或离线均可（清除登录状态）。在线玩家会被踢出以重新登录
     private void handleForceLogout(CommandSender sender, String[] args) {
         if (args.length < 2) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogout_usage", sender)));
@@ -98,6 +100,11 @@ public final class HTLoginCommand implements BasicCommand {
             boolean success = plugin.getAuthManager().forceLogout(target.getUniqueId());
             if (success) {
                 sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogout_success", sender, targetName)));
+                // 在线玩家踢出以重新登录
+                Player online = Bukkit.getPlayerExact(targetName);
+                if (online != null) {
+                    online.kick(HTLogin.legacy(I18n.get("htlogin.forcelogout_kick", online)));
+                }
             } else {
                 sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.not_logged_in", sender, targetName)));
             }
@@ -141,6 +148,8 @@ public final class HTLoginCommand implements BasicCommand {
             return;
         }
         plugin.getAuthManager().forceLogin(target);
+        // 强制登录后传送回上次退出位置（坐标保护模式下生效）
+        plugin.getAuthManager().returnToLogoutLocation(target);
         sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogin_success", sender, targetName)));
     }
 
@@ -148,4 +157,32 @@ public final class HTLoginCommand implements BasicCommand {
     public String permission() {
         return "htlogin.admin";
     }
+
+    @Override
+    public List<String> suggest(CommandSourceStack stack, String[] args) {
+        List<String> result = new ArrayList<>();
+        if (args.length == 1) {
+            // 补全子命令名
+            String prefix = args[0].toLowerCase();
+            for (String sub : SUBCOMMANDS) {
+                if (sub.startsWith(prefix)) result.add(sub);
+            }
+        } else if (args.length == 2) {
+            // accounts/forcelogout/forcechangepw/forcelogin 第二个参数补全在线玩家名
+            String sub = args[0].toLowerCase();
+            if (sub.equals("accounts") || sub.equals("forcelogout")
+                    || sub.equals("forcechangepw") || sub.equals("forcelogin")) {
+                String prefix = args[1].toLowerCase();
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    String name = player.getName();
+                    if (name.toLowerCase().startsWith(prefix)) result.add(name);
+                }
+            }
+        }
+        return result;
+    }
+
+    private static final String[] SUBCOMMANDS = {
+            "reload", "accounts", "forcelogout", "forcechangepw", "forcelogin"
+    };
 }

@@ -10,6 +10,12 @@ license: GPL-3.0
 folia-supported: true
 loader: org.HowToLogin.plugin.PluginLoaderImpl
 
+dependencies:
+  server:
+    PlaceholderAPI:
+      load: BEFORE
+      required: false
+
 permissions:
   htlogin.admin:
     description: 管理员权限

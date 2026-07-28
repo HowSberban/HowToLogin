@@ -41,6 +41,9 @@ public final class ConfigManager {
     private int maxPasswordLength;
     private String passwordHashAlgorithm;
 
+    // 注册限制
+    private int maxAccountsPerIp;
+
     // 行为限制
     private boolean preventMove;
     private boolean preventLook;
@@ -48,14 +51,11 @@ public final class ConfigManager {
     private boolean preventCommand;
     private List<String> commandWhitelist;
     private boolean preventWorldInteraction;
+    private boolean preventInventory;
 
     // 登录前保护
     private boolean protectionPosEnabled;
     private int protectionPosSpawnRadius;
-
-    // 通用设置
-    private String defaultLanguage;
-    private boolean clientLanguageDetection;
 
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -151,6 +151,9 @@ public final class ConfigManager {
         this.maxPasswordLength = config.getInt("password.max-length", 32);
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
 
+        // 注册限制
+        this.maxAccountsPerIp = config.getInt("register.max-accounts-per-ip", 0);
+
         // 行为限制
         this.preventMove = config.getBoolean("prevent.move", true);
         this.preventLook = config.getBoolean("prevent.look", true);
@@ -164,14 +167,16 @@ public final class ConfigManager {
                 .map(String::toLowerCase)
                 .toList();
         this.preventWorldInteraction = config.getBoolean("prevent.world-interaction", true);
+        this.preventInventory = config.getBoolean("prevent.inventory", true);
 
         // 登录前保护
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
         this.protectionPosSpawnRadius = config.getInt("protection.pos.spawn-radius", 10);
 
         // 通用设置：默认语言（控制台日志和客户端语言无匹配文件时使用）
-        this.defaultLanguage = config.getString("settings.default-language", "zh_CN");
-        this.clientLanguageDetection = config.getBoolean("settings.i18n", true);
+        // 通用设置
+        String defaultLanguage = config.getString("settings.default-language", "zh_CN");
+        boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
         I18n.setDefaultLocale(defaultLanguage);
         I18n.setClientLanguageDetection(clientLanguageDetection);
     }
@@ -205,6 +210,9 @@ public final class ConfigManager {
     public int maxPasswordLength() { return maxPasswordLength; }
     public String passwordHashAlgorithm() { return passwordHashAlgorithm; }
 
+    // 注册限制
+    public int maxAccountsPerIp() { return maxAccountsPerIp; }
+
     // 行为限制
     public boolean preventMove() { return preventMove; }
     public boolean preventLook() { return preventLook; }
@@ -212,6 +220,7 @@ public final class ConfigManager {
     public boolean preventCommand() { return preventCommand; }
     public List<String> commandWhitelist() { return commandWhitelist; }
     public boolean preventWorldInteraction() { return preventWorldInteraction; }
+    public boolean preventInventory() { return preventInventory; }
 
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }

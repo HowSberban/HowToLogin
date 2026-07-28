@@ -7,6 +7,7 @@ import org.HowToLogin.plugin.I18n;
 import org.HowToLogin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 
 public final class LoginCommand implements BasicCommand {
 
@@ -17,7 +18,7 @@ public final class LoginCommand implements BasicCommand {
     }
 
     @Override
-    public void execute(CommandSourceStack stack, String[] args) {
+    public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
             sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));

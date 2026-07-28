@@ -10,14 +10,14 @@ import java.util.HexFormat;
 
 /**
  * 密码哈希工具：支持 BCrypt 与 SHA-256 两种算法并存。
- *
+ * <p>
  * 存储格式：
  *   - BCrypt：  $2a$10$...（BCrypt 标准格式，以 $2 开头）
  *   - SHA-256： saltHex:hashHex（旧格式，salt 与 hash 用冒号分隔的十六进制）
- *
+ * <p>
  * checkPassword 会自动识别存储格式并按对应算法验证。
  * hashPassword 根据传入的 algorithm 参数决定新密码使用哪种算法。
- *
+ * <p>
  * 推荐使用 BCrypt（自带盐值、可调 work factor、抗 GPU 暴力破解）。
  * SHA-256 仅作为兼容旧数据的回退方案，登录成功后应通过 AuthManager 自动升级为 BCrypt。
  */
