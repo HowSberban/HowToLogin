@@ -23,6 +23,8 @@ import org.bukkit.event.server.TabCompleteEvent;
 import java.util.List;
 import java.util.Locale;
 
+// AsyncPlayerSpawnLocationEvent 等 Paper API 标记为 @ApiStatus.Experimental，实际已稳定可用
+@SuppressWarnings("UnstableApiUsage")
 public final class PlayerListener implements Listener {
 
     private final HTLogin plugin;
