@@ -1,7 +1,7 @@
-package org.HowToLogin.plugin.command;
+package org.howtologin.plugin.command;
 
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.I18n;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
 import org.bukkit.entity.Player;
 
 /** 密码校验工具：统一处理密码长度等规则，避免在多个命令中重复代码 */

@@ -1,6 +1,6 @@
 name: HTLogin
 version: '${version}'
-main: org.HowToLogin.plugin.HTLogin
+main: org.howtologin.plugin.HTLogin
 api-version: '1.21'
 load: STARTUP
 authors:
@@ -8,7 +8,7 @@ authors:
 description: A login plugin with Paper API.
 license: GPL-3.0
 folia-supported: true
-loader: org.HowToLogin.plugin.PluginLoaderImpl
+loader: org.howtologin.plugin.PluginLoaderImpl
 
 dependencies:
   server:

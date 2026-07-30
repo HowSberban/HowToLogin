@@ -1,7 +1,7 @@
-package org.HowToLogin.plugin.hook;
+package org.howtologin.plugin.hook;
 
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
-import org.HowToLogin.plugin.HTLogin;
+import org.howtologin.plugin.HTLogin;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;

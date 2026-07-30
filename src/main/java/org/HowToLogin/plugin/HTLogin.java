@@ -1,14 +1,14 @@
-package org.HowToLogin.plugin;
+package org.howtologin.plugin;
 
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
-import org.HowToLogin.plugin.auth.AuthManager;
-import org.HowToLogin.plugin.command.*;
-import org.HowToLogin.plugin.config.ConfigManager;
-import org.HowToLogin.plugin.data.PlayerDataManager;
-import org.HowToLogin.plugin.hook.HTLoginExpansion;
-import org.HowToLogin.plugin.listener.PlayerListener;
+import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.command.*;
+import org.howtologin.plugin.config.ConfigManager;
+import org.howtologin.plugin.data.PlayerDataManager;
+import org.howtologin.plugin.hook.HTLoginExpansion;
+import org.howtologin.plugin.listener.PlayerListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -40,6 +40,17 @@ public final class HTLogin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        // 关服前保存所有在线已登录玩家的当前位置
+        // stop 关服时 PlayerQuitEvent 可能不触发或时序不确定，显式保存确保位置不丢失
+        // 用 updateLogoutLocationCache 只更新内存缓存，由后续 saveSync 统一落库
+        // （插件禁用后无法注册异步保存任务）
+        if (authManager != null) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                if (authManager.isLoggedIn(player)) {
+                    authManager.updateLogoutLocationCache(player);
+                }
+            }
+        }
         if (playerDataManager != null) {
             playerDataManager.saveSync();
             playerDataManager.close();
@@ -61,8 +72,10 @@ public final class HTLogin extends JavaPlugin {
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
             commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
-            commands.register("unregister", "删除账号（管理员）", List.of(), new UnregisterCommand(authManager));
-            commands.register("htlogin", "插件管理命令", List.of(), new HTLoginCommand(this));
+            commands.register(new UnregisterCommand(authManager).buildNode(), "删除账号（管理员）", List.of());
+            // htlogin 使用 brigadier 原生注册，子命令作为 literal 节点，
+            // 客户端在输入空格后能自动显示子命令列表
+            commands.register(new HTLoginCommand(this).buildNode(), "插件管理命令", List.of());
         });
     }
 

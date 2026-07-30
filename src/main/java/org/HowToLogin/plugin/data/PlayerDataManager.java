@@ -1,8 +1,8 @@
-package org.HowToLogin.plugin.data;
+package org.howtologin.plugin.data;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-import org.HowToLogin.plugin.HTLogin;
+import org.howtologin.plugin.HTLogin;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;

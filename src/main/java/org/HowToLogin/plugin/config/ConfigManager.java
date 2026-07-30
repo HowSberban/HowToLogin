@@ -1,8 +1,8 @@
-package org.HowToLogin.plugin.config;
+package org.howtologin.plugin.config;
 
 import org.bukkit.configuration.file.FileConfiguration;
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.I18n;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
 
 import java.io.File;
 import java.io.IOException;
@@ -57,6 +57,9 @@ public final class ConfigManager {
     private boolean protectionPosEnabled;
     private int protectionPosSpawnRadius;
 
+    // 通用设置
+    private boolean realUnreg;
+
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
         load();
@@ -94,7 +97,8 @@ public final class ConfigManager {
         }
 
         boolean configMismatch = !configVersion.equals(fileVersion);
-        boolean langMismatch = !pluginVersion.equals(storedLangVersion);
+        // 首次启动（.lang_version 不存在）不视为不匹配，直接写入当前版本
+        boolean langMismatch = langVersionFile.exists() && !pluginVersion.equals(storedLangVersion);
 
         if (configMismatch) {
             // major.minor 变化：覆盖 config + 语言文件
@@ -115,6 +119,9 @@ public final class ConfigManager {
             writeLangVersion(langVersionFile, pluginVersion);
             I18n.reload();
             plugin.getLogger().warning(I18n.get("plugin.lang_version_mismatch", storedLangVersion, pluginVersion));
+        } else if (!langVersionFile.exists()) {
+            // 首次启动：写入当前版本，不覆盖、不警告
+            writeLangVersion(langVersionFile, pluginVersion);
         }
 
         // 从 config.yml 加载各项配置参数
@@ -173,6 +180,9 @@ public final class ConfigManager {
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
         this.protectionPosSpawnRadius = config.getInt("protection.pos.spawn-radius", 10);
 
+        // 通用设置
+        this.realUnreg = config.getBoolean("settings.real-unreg", true);
+
         // 通用设置：默认语言（控制台日志和客户端语言无匹配文件时使用）
         // 通用设置
         String defaultLanguage = config.getString("settings.default-language", "zh_CN");
@@ -225,6 +235,9 @@ public final class ConfigManager {
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }
     public int protectionPosSpawnRadius() { return protectionPosSpawnRadius; }
+
+    // 通用设置
+    public boolean realUnreg() { return realUnreg; }
 
     /** 取版本号前两位（major.minor），patch 版本仅修 bug 不影响配置结构 */
     private static String majorMinor(String version) {

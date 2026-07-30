@@ -1,4 +1,4 @@
-package org.HowToLogin.plugin;
+package org.howtologin.plugin;
 
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -97,7 +97,7 @@ public final class I18n {
     // ===== 默认语言（控制台日志用） =====
 
     public static String get(String key) {
-        return get(key, defaultLocale);
+        return getByLocale(key, defaultLocale);
     }
 
     public static String get(String key, Object... args) {
@@ -110,8 +110,7 @@ public final class I18n {
     public static String get(String key, Player player) {
         if (!clientLanguageDetection) return get(key);
         // locale() 返回 Locale 对象，需 toString() 转为 "zh_CN" 格式字符串
-        // 否则会误匹配 get(String, Object...) 重载，locale 被当作 format 参数忽略
-        return get(key, player.locale().toString());
+        return getByLocale(key, player.locale().toString());
     }
 
     /** 根据玩家客户端 locale 获取消息并填充参数 */
@@ -131,9 +130,10 @@ public final class I18n {
         return format(get(key, sender), args);
     }
 
-    // ===== 指定 locale =====
+    // ===== 内部方法 =====
 
-    public static String get(String key, String locale) {
+    /** 按 locale 查找消息（精确匹配失败回退到默认语言） */
+    private static String getByLocale(String key, String locale) {
         Properties props = bundles.get(locale);
         if (props == null) {
             // 精确匹配失败：回退到默认语言
@@ -144,10 +144,6 @@ public final class I18n {
         }
         String value = props.getProperty(key);
         return value != null ? value : key;
-    }
-
-    public static String get(String key, String locale, Object... args) {
-        return format(get(key, locale), args);
     }
 
     private static String format(String pattern, Object... args) {

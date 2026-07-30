@@ -1,4 +1,4 @@
-package org.HowToLogin.plugin.auth;
+package org.howtologin.plugin.auth;
 
 import org.mindrot.jbcrypt.BCrypt;
 

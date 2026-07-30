@@ -3,7 +3,7 @@ plugins {
     id("xyz.jpenilla.run-paper") version "3.0.2"
 }
 
-group = 'org.HowToLogin'
+group = 'org.howtologin'
 version = '0.1.0'
 
 repositories {

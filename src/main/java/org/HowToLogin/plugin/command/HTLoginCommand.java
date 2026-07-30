@@ -1,22 +1,31 @@
-package org.HowToLogin.plugin.command;
+package org.howtologin.plugin.command;
 
-import io.papermc.paper.command.brigadier.BasicCommand;
-import io.papermc.paper.command.brigadier.CommandSourceStack;
+import com.mojang.brigadier.Command;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
+import com.mojang.brigadier.tree.LiteralCommandNode;
 import net.kyori.adventure.text.Component;
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.I18n;
-import org.HowToLogin.plugin.auth.AuthManager;
-import org.HowToLogin.plugin.data.PlayerDataManager.PlayerData;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
-import org.jetbrains.annotations.NotNull;
 
-import java.util.ArrayList;
 import java.util.List;
 
-public final class HTLoginCommand implements BasicCommand {
+import static io.papermc.paper.command.brigadier.Commands.argument;
+import static io.papermc.paper.command.brigadier.Commands.literal;
+
+/**
+ * htlogin 管理命令，使用 brigadier 原生注册。
+ * 子命令作为 literal 节点，客户端输入空格后能自动显示子命令列表。
+ */
+@SuppressWarnings("SameReturnValue")
+public final class HTLoginCommand {
 
     private final HTLogin plugin;
 
@@ -24,37 +33,68 @@ public final class HTLoginCommand implements BasicCommand {
         this.plugin = plugin;
     }
 
-    @Override
-    public void execute(CommandSourceStack stack, String[] args) {
-        CommandSender sender = stack.getSender();
-        if (args.length < 1) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.usage", sender)));
-            return;
-        }
+    /** 构建命令树节点（由 HTLogin 注册时调用） */
+    public LiteralCommandNode<io.papermc.paper.command.brigadier.CommandSourceStack> buildNode() {
+        return literal("htlogin")
+                .requires(stack -> stack.getSender().hasPermission("htlogin.admin"))
+                // /htlogin — 显示用法
+                .executes(this::showUsage)
+                // /htlogin reload
+                .then(literal("reload")
+                        .executes(this::handleReload))
+                // /htlogin accounts <player>
+                .then(literal("accounts")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_PLAYERS)
+                                .executes(this::handleAccounts)))
+                // /htlogin forcelogout <player>
+                .then(literal("forcelogout")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_PLAYERS)
+                                .executes(this::handleForceLogout)))
+                // /htlogin forcechangepw <player> <newpassword>
+                .then(literal("forcechangepw")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_PLAYERS)
+                                .then(argument("newpassword", StringArgumentType.word())
+                                        .executes(this::handleForceChangePw))))
+                // /htlogin forcelogin <player>
+                .then(literal("forcelogin")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_PLAYERS)
+                                .executes(this::handleForceLogin)))
+                .build();
+    }
 
-        switch (args[0].toLowerCase()) {
-            case "reload" -> {
-                plugin.getConfigManager().reload();
-                I18n.reload();
-                plugin.getAuthManager().cleanupExpiredStates();
-                sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_success", sender)));
-                plugin.getLogger().info(I18n.get("plugin.config_reload_log"));
-            }
-            case "accounts" -> handleAccounts(sender, args);
-            case "forcelogout" -> handleForceLogout(sender, args);
-            case "forcechangepw" -> handleForceChangePw(sender, args);
-            case "forcelogin" -> handleForceLogin(sender, args);
-            default -> sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.unknown_subcommand", sender)));
-        }
+    /** 在线玩家名补全 */
+    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_PLAYERS =
+            (context, builder) -> {
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    builder.suggest(player.getName());
+                }
+                return builder.buildFuture();
+            };
+
+    private int showUsage(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.usage", sender)));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int handleReload(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        plugin.getConfigManager().reload();
+        I18n.reload();
+        plugin.getAuthManager().cleanupExpiredStates();
+        sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_success", sender)));
+        plugin.getLogger().info(I18n.get("plugin.config_reload_log"));
+        return Command.SINGLE_SUCCESS;
     }
 
     // 查找指定玩家 IP 下的其它账号（异步执行，避免 getOfflinePlayer 阻塞区域线程）
-    private void handleAccounts(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_usage", sender)));
-            return;
-        }
-        String targetName = args[1];
+    private int handleAccounts(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
 
         // 异步执行：getOfflinePlayer 可能阻塞网络查询（Folia 兼容）
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
@@ -86,15 +126,13 @@ public final class HTLoginCommand implements BasicCommand {
                 sender.sendMessage(Component.text(" - " + name));
             }
         });
+        return Command.SINGLE_SUCCESS;
     }
 
     // 强制登出：玩家在线或离线均可（清除登录状态）。在线玩家会被踢出以重新登录
-    private void handleForceLogout(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogout_usage", sender)));
-            return;
-        }
-        String targetName = args[1];
+    private int handleForceLogout(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
         // 异步解析 UUID（Folia 兼容）
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
@@ -110,16 +148,14 @@ public final class HTLoginCommand implements BasicCommand {
                 sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.not_logged_in", sender, targetName)));
             }
         });
+        return Command.SINGLE_SUCCESS;
     }
 
     // 强制修改密码：玩家在线或离线均可，无需旧密码。在线玩家会被踢出以重新登录
-    private void handleForceChangePw(CommandSender sender, String[] args) {
-        if (args.length < 3) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcechangepw_usage", sender)));
-            return;
-        }
-        String targetName = args[1];
-        String newPassword = args[2];
+    private int handleForceChangePw(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
+        String newPassword = StringArgumentType.getString(ctx, "newpassword");
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             AuthManager auth = plugin.getAuthManager();
@@ -134,56 +170,27 @@ public final class HTLoginCommand implements BasicCommand {
                 online.kick(HTLogin.legacy(I18n.get("htlogin.forcechangepw_kick", online)));
             }
         });
+        return Command.SINGLE_SUCCESS;
     }
 
     // 强制登录：仅对在线玩家生效
-    private void handleForceLogin(CommandSender sender, String[] args) {
-        if (args.length < 2) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogin_usage", sender)));
-            return;
-        }
-        String targetName = args[1];
+    private int handleForceLogin(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
         Player target = Bukkit.getPlayerExact(targetName);
         if (target == null) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.player_not_online", sender, targetName)));
-            return;
+            return 0;
+        }
+        // 已登录则无需重复操作
+        if (plugin.getAuthManager().isLoggedIn(target)) {
+            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.already_logged_in", sender, targetName)));
+            return 0;
         }
         plugin.getAuthManager().forceLogin(target);
-        // 强制登录后传送回上次退出位置（坐标保护模式下生效）
+        // 强制登录后传送回上次退出位置
         plugin.getAuthManager().returnToLogoutLocation(target);
         sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogin_success", sender, targetName)));
+        return Command.SINGLE_SUCCESS;
     }
-
-    @Override
-    public String permission() {
-        return "htlogin.admin";
-    }
-
-    @Override
-    public @NotNull List<String> suggest(@NotNull CommandSourceStack stack, String[] args) {
-        List<String> result = new ArrayList<>();
-        if (args.length == 1) {
-            // 补全子命令名
-            String prefix = args[0].toLowerCase();
-            for (String sub : SUBCOMMANDS) {
-                if (sub.startsWith(prefix)) result.add(sub);
-            }
-        } else if (args.length == 2) {
-            // accounts/forcelogout/forcechangepw/forcelogin 第二个参数补全在线玩家名
-            String sub = args[0].toLowerCase();
-            if (sub.equals("accounts") || sub.equals("forcelogout")
-                    || sub.equals("forcechangepw") || sub.equals("forcelogin")) {
-                String prefix = args[1].toLowerCase();
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    String name = player.getName();
-                    if (name.toLowerCase().startsWith(prefix)) result.add(name);
-                }
-            }
-        }
-        return result;
-    }
-
-    private static final String[] SUBCOMMANDS = {
-            "reload", "accounts", "forcelogout", "forcechangepw", "forcelogin"
-    };
 }

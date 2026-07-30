@@ -1,10 +1,10 @@
-package org.HowToLogin.plugin.listener;
+package org.howtologin.plugin.listener;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
 import io.papermc.paper.event.player.AsyncPlayerSpawnLocationEvent;
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.I18n;
-import org.HowToLogin.plugin.auth.AuthManager;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -68,8 +68,7 @@ public final class PlayerListener implements Listener {
             if (authManager.checkIpAutoLogin(player)) {
                 authManager.loginByIp(player);
                 player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
-                // 登录后传送回上次退出位置（坐标保护模式下生效）
-                authManager.returnToLogoutLocation(player);
+                // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
                 return;
             }
             authManager.addPendingLogin(player);
@@ -117,19 +116,44 @@ public final class PlayerListener implements Listener {
     }
 
     /**
-     * 在 JoinGamePacket 发送前修改老玩家 spawn 位置为主世界出生点周围随机位置，
-     * 从根本上防止 player data 中的退出位置泄露给客户端（F3、小地图 mod 等）。
-     * 新玩家不干预，保留原版出生机制（无泄露风险）。
+     * 在 JoinGamePacket 发送前调整老玩家 spawn 位置。
+     * - IP 自动登录的玩家：直接在退出位置出生，避免后续传送。
+     * - 启用坐标保护：强制主世界随机位置，防止坐标泄露（F3、小地图 mod 等）。
+     * - 未启用坐标保护：检查原位置是否悬空，悬空则改用随机出生点（与 pos 保护相同逻辑），
+     *   防止反作弊误踢，同时不修正到正下方地面（避免玩家利用逃避摔落伤害）。
+     * 新玩家不干预，保留原版出生机制。
      * 此事件在 configuration phase 触发（异步线程），玩家尚未真正加入世界。
-     * 强制使用主世界，防止玩家上次退出维度（下界/末地）信息泄露。
      */
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSpawnLocation(AsyncPlayerSpawnLocationEvent event) {
-        // 新玩家不干预，保留原版出生机制；老玩家强制主世界随机位置防止坐标泄露
-        if (plugin.getConfigManager().protectionPosEnabled() && !event.isNewPlayer()) {
+        // 新玩家不干预，保留原版出生机制
+        if (event.isNewPlayer()) return;
+
+        var conn = event.getConnection();
+        java.util.UUID uuid = conn.getProfile().getId();
+        conn.getClientAddress();
+        String ip = conn.getClientAddress().getAddress().getHostAddress();
+
+        // IP 自动登录的玩家直接在退出位置出生，避免后续传送
+        if (uuid != null && authManager.checkIpAutoLogin(uuid, ip)) {
+            Location logoutLoc = authManager.getLogoutLocation(uuid);
+            if (logoutLoc != null) {
+                event.setSpawnLocation(logoutLoc);
+                return;
+            }
+        }
+
+        if (plugin.getConfigManager().protectionPosEnabled()) {
+            // 启用坐标保护：强制主世界随机位置，防止坐标泄露
             org.bukkit.World world = org.bukkit.Bukkit.getWorlds().getFirst();
             Location safeSpawn = authManager.findSafeAuthSpawn(world);
             event.setSpawnLocation(safeSpawn);
+        } else {
+            // 未启用坐标保护：悬空时改用随机出生点，防止反作弊误踢
+            if (authManager.isLocationFloating(event.getSpawnLocation())) {
+                org.bukkit.World world = org.bukkit.Bukkit.getWorlds().getFirst();
+                event.setSpawnLocation(authManager.findSafeAuthSpawn(world));
+            }
         }
     }
 
@@ -158,6 +182,8 @@ public final class PlayerListener implements Listener {
         if (authManager.isLoggedIn(player)) {
             authManager.saveLogoutLocation(player);
         }
+        // 注销玩家退出时删除原版 .dat（服务器已保存并释放文件锁）
+        authManager.tryDeletePlayerDataOnQuit(player.getUniqueId());
         authManager.clearSession(player);
     }
 
@@ -308,6 +334,10 @@ public final class PlayerListener implements Listener {
 
         String buffer = event.getBuffer();
         if (!buffer.startsWith("/")) return;
+
+        // 只过滤顶层命令名补全（buffer 无空格时）
+        // 一旦进入命令参数补全（buffer 含空格），不再过滤，交给各命令自身的 suggest 逻辑
+        if (buffer.indexOf(' ') != -1) return;
 
         // 过滤补全结果：只保留白名单命令
         List<String> whitelist = plugin.getConfigManager().commandWhitelist();

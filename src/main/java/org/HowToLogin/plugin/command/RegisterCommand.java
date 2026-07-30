@@ -1,10 +1,10 @@
-package org.HowToLogin.plugin.command;
+package org.howtologin.plugin.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.I18n;
-import org.HowToLogin.plugin.auth.AuthManager;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;

@@ -47,7 +47,7 @@ login:
 # 注册限制
 register:
   # 同一 IP 最大账号数量，0 = 不限制
-  max-accounts-per-ip: 0
+  max-accounts-per-ip: 3
 
 # 密码规则
 password:
@@ -98,3 +98,6 @@ settings:
   default-language: zh_CN
   # 是否根据客户端语言自动匹配消息（关闭则所有玩家使用默认语言）
   i18n: true
+  # 注销账号时是否删除 Minecraft 原版玩家数据（player.dat）
+  # 包含背包、装备、血量、经验、位置、末影箱等
+  real-unreg: true

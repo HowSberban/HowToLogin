@@ -1,14 +1,16 @@
-package org.HowToLogin.plugin.auth;
+package org.howtologin.plugin.auth;
 
-import org.HowToLogin.plugin.HTLogin;
-import org.HowToLogin.plugin.config.ConfigManager;
-import org.HowToLogin.plugin.data.PlayerDataManager;
-import org.HowToLogin.plugin.data.PlayerDataManager.PlayerData;
+import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.config.ConfigManager;
+import org.howtologin.plugin.data.PlayerDataManager;
+import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
 
+import java.io.File;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -28,6 +30,8 @@ public final class AuthManager {
     // 暴力破解防护：记录失败次数和踢出到期时间
     private final Map<UUID, Integer> failedAttempts = new ConcurrentHashMap<>();
     private final Map<UUID, Long> kickUntil = new ConcurrentHashMap<>();
+    // 标记待删除原版数据的玩家（unregister 后等待 PlayerQuitEvent 触发时删除 .dat）
+    private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
 
     public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
         this.plugin = plugin;
@@ -95,10 +99,16 @@ public final class AuthManager {
 
     // ===== 管理员强制操作 =====
 
-    /** 强制登出玩家（无需玩家在线，清除登录状态） */
+    /** 强制登出玩家（无需玩家在线，清除登录状态，并使 IP 自动登录失效） */
     public boolean forceLogout(UUID uuid) {
         if (!loggedIn.remove(uuid)) return false;
         pendingLogin.add(uuid);
+        // 清除 lastLogin 使 IP 自动登录立即失效，下次必须用密码登录
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data != null) {
+            data.lastLogin(0);
+            dataManager.save(uuid);
+        }
         return true;
     }
 
@@ -127,14 +137,19 @@ public final class AuthManager {
 
     // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
     public boolean checkIpAutoLogin(Player player) {
+        if (player.getAddress() == null) return false;
+        return checkIpAutoLogin(player.getUniqueId(), player.getAddress().getAddress().getHostAddress());
+    }
+
+    /** IP 免密登录检查（无需 Player 对象，用于 AsyncPlayerSpawnLocationEvent） */
+    public boolean checkIpAutoLogin(UUID uuid, String ip) {
         if (!configManager.ipAutoLoginEnabled()) return false;
-        UUID uuid = player.getUniqueId();
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
-        if (player.getAddress() == null) return false;
+        if (ip == null) return false;
         String storedIp = data.ip();
         if (storedIp == null || storedIp.isEmpty()) return false;
-        if (!player.getAddress().getAddress().getHostAddress().equals(storedIp)) return false;
+        if (!ip.equals(storedIp)) return false;
         // 检查失效时间：0 表示永不失效
         int expireMinutes = configManager.ipAutoLoginExpireMinutes();
         if (expireMinutes <= 0) return true;
@@ -162,6 +177,12 @@ public final class AuthManager {
         UUID uuid = player.getUniqueId();
         loggedIn.remove(uuid);
         pendingLogin.add(uuid);
+        // 清除 lastLogin 使 IP 自动登录立即失效，下次必须用密码登录
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data != null) {
+            data.lastLogin(0);
+            dataManager.save(uuid);
+        }
     }
 
     // Change password
@@ -186,7 +207,52 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
+        invulnerablePending.remove(uuid);
+        // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
+        if (configManager.realUnreg()) {
+            if (Bukkit.getPlayer(uuid) != null) {
+                // 玩家在线：标记后由 PlayerQuitEvent 删除（避免文件锁冲突）
+                pendingDatDelete.add(uuid);
+            } else {
+                // 玩家离线：无文件锁，直接删除
+                deletePlayerData(uuid);
+            }
+        }
         return true;
+    }
+
+    /**
+     * 在 PlayerQuitEvent 中调用：玩家退出时服务器已保存 .dat 并释放文件锁，
+     * 此时删除最安全。如果玩家快速重新加入，新会话不会受影响（新 .dat 尚未创建）。
+     * 返回 true 表示已处理删除（调用方无需再处理）。
+     */
+    public void tryDeletePlayerDataOnQuit(UUID uuid) {
+        if (!pendingDatDelete.remove(uuid)) return;
+        deletePlayerData(uuid);
+    }
+
+    /**
+     * 删除 Minecraft 原版玩家数据文件（player.dat 及其备份）。
+     * 实时检测目录：26.1+ 使用 players/data，之前使用 playerdata。
+     * 优先检查新结构：升级后旧 playerdata 目录可能残留但不再使用。
+     * 两个目录都不存在时（首次启动尚未有玩家进服），默认用新结构。
+     * 应在 PlayerQuitEvent 中调用（服务器已保存 .dat 并释放文件锁）。
+     */
+    private void deletePlayerData(UUID uuid) {
+        World world = Bukkit.getWorlds().getFirst();
+        File worldDir = world.getWorldFolder();
+        File newDir = new File(worldDir, "players/data");
+        File oldDir = new File(worldDir, "playerdata");
+        // 优先检查新结构（26.1+），旧目录可能残留但不再使用
+        File dir = newDir.isDirectory() ? newDir : oldDir;
+        File datFile = new File(dir, uuid + ".dat");
+        File datOldFile = new File(dir, uuid + ".dat_old");
+        if (datFile.exists() && !datFile.delete()) {
+            plugin.getLogger().warning("无法删除玩家数据文件: " + datFile.getAbsolutePath());
+        }
+        if (datOldFile.exists() && !datOldFile.delete()) {
+            plugin.getLogger().warning("无法删除玩家数据备份文件: " + datOldFile.getAbsolutePath());
+        }
     }
 
     // 玩家退出时调用 — 清理会话状态
@@ -249,6 +315,24 @@ public final class AuthManager {
     // ===== 坐标保护相关 =====
 
     /**
+     * 判断位置是否悬空（下方无固体方块支撑）。
+     * 此方法会阻塞等待区块加载，应在异步线程中调用（如 AsyncPlayerSpawnLocationEvent）。
+     */
+    public boolean isLocationFloating(Location loc) {
+        World world = loc.getWorld();
+        if (world == null) return false;
+        int x = loc.getBlockX();
+        int z = loc.getBlockZ();
+        int y = loc.getBlockY();
+        if (y - 1 < world.getMinHeight()) return true;
+        int blockX = x & 15;
+        int blockZ = z & 15;
+        org.bukkit.Chunk chunk = world.getChunkAtAsyncUrgently(x >> 4, z >> 4).join();
+        org.bukkit.ChunkSnapshot snapshot = chunk.getChunkSnapshot();
+        return !snapshot.getBlockData(blockX, y - 1, blockZ).getMaterial().isSolid();
+    }
+
+    /**
      * 保存玩家当前退出位置（仅已登录玩家退出时调用）。
      * 未登录玩家退出不会更新位置，保持上次保存的位置不变。
      */
@@ -261,31 +345,33 @@ public final class AuthManager {
     }
 
     /**
+     * 仅更新内存缓存中的退出位置，不落库。
+     * 用于 onDisable：插件禁用后无法注册异步任务，改为更新缓存后由 saveSync 统一落库。
+     */
+    public void updateLogoutLocationCache(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data != null) {
+            data.logoutLocation(PlayerDataManager.serializeLocation(player.getLocation()));
+        }
+    }
+
+    /**
      * 登录/注册成功后，传送回上次退出位置。
      * 如果没有保存的位置（新玩家），不传送（留在世界出生点）。
-     * 仅在启用坐标保护时生效。
      * 使用 teleportAsync 以兼容 Folia（Folia 禁止同步 teleport）。
-     * 传送后延迟 2 tick 恢复伤害，防止传送前瞬间受伤。
+     * 调用时机：玩家已在世界中（密码登录/注册/forcelogin），非 PlayerJoinEvent 期间。
      */
     public void returnToLogoutLocation(Player player) {
-        if (configManager.protectionPosEnabled()) {
-            Location loc = getLogoutLocation(player);
-            if (loc == null) {
-                // 新玩家没有保存的位置，留在世界出生点
-                return;
-            }
-            // 标记传送过渡期，保持无敌
-            invulnerablePending.add(player.getUniqueId());
-            player.teleportAsync(loc).thenAccept(success -> {
-                if (success) {
-                    // 传送成功后延迟 2 tick 移除无敌（40ms × 2 = 100ms 缓冲）
-                    player.getScheduler().runDelayed(plugin, task ->
-                            invulnerablePending.remove(player.getUniqueId()), null, 2L);
-                } else {
-                    invulnerablePending.remove(player.getUniqueId());
-                }
-            });
+        Location loc = getLogoutLocation(player);
+        if (loc == null) {
+            // 新玩家没有保存的位置，留在世界出生点
+            return;
         }
+        // 标记传送过渡期，保持无敌
+        invulnerablePending.add(player.getUniqueId());
+        // 直接异步传送，传送完成后移除无敌状态
+        player.teleportAsync(loc).thenAccept(success ->
+                invulnerablePending.remove(player.getUniqueId()));
     }
 
     /** 玩家是否处于传送过渡期（已登录但还在传送，应保持无敌） */
@@ -337,8 +423,14 @@ public final class AuthManager {
         return Integer.MIN_VALUE;
     }
 
-    private Location getLogoutLocation(Player player) {
-        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+    /** 获取玩家上次退出位置（无保存位置返回 null） */
+    public Location getLogoutLocation(Player player) {
+        return getLogoutLocation(player.getUniqueId());
+    }
+
+    /** 获取玩家上次退出位置（无保存位置返回 null） */
+    public Location getLogoutLocation(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return null;
         return PlayerDataManager.deserializeLocation(data.logoutLocation());
     }
