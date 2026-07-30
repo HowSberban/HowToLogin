@@ -55,12 +55,12 @@ public final class PlayerListener implements Listener {
             return;
         }
 
-        // 同一 IP 账号数量限制：仅对新玩家（无账号）检查，已注册玩家允许进入
+        // 同一 IP 账号数量限制：仅对新玩家（无账号）检查
+        // 统计已注册账号 + 在线未注册玩家，防止多人同时进服后注册超限
         int maxAccounts = plugin.getConfigManager().maxAccountsPerIp();
         if (maxAccounts > 0 && !authManager.hasAccount(uuid)) {
             String ip = event.getAddress().getHostAddress();
-            int current = plugin.getPlayerDataManager().findByIp(ip).size();
-            if (current >= maxAccounts) {
+            if (!authManager.checkIpRegisterLimit(uuid, ip)) {
                 event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
                         HTLogin.legacy(I18n.get("register.ip_limit", maxAccounts)));
             }

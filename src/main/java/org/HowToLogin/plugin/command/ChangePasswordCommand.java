@@ -41,6 +41,7 @@ public final class ChangePasswordCommand implements BasicCommand {
         String newPassword = args[1];
 
         if (PasswordValidator.invalidLength(plugin, player, newPassword)) return;
+        if (PasswordValidator.invalidPattern(plugin, player, newPassword)) return;
 
         if (authManager.changePassword(player, oldPassword, newPassword)) {
             player.sendMessage(HTLogin.legacy(I18n.get("changepw.success", player)));

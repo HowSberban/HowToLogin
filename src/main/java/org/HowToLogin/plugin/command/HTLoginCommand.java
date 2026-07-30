@@ -156,6 +156,7 @@ public final class HTLoginCommand {
         CommandSender sender = ctx.getSource().getSender();
         String targetName = StringArgumentType.getString(ctx, "player");
         String newPassword = StringArgumentType.getString(ctx, "newpassword");
+        if (PasswordValidator.invalidPattern(plugin, sender, newPassword)) return Command.SINGLE_SUCCESS;
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             AuthManager auth = plugin.getAuthManager();

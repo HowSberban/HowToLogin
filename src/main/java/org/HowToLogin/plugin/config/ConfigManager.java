@@ -8,6 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 // preventXxx() 方法在调用方均以 ! 守卫子句形式使用（if (!preventXxx()) return;），
 // IDE 误报"始终反转"，但反转方法逻辑会导致与方法名语义相反，破坏统一的 preventXxx 设计模式
@@ -40,6 +41,7 @@ public final class ConfigManager {
     private int minPasswordLength;
     private int maxPasswordLength;
     private String passwordHashAlgorithm;
+    private Pattern passwordPattern;
 
     // 注册限制
     private int maxAccountsPerIp;
@@ -137,6 +139,18 @@ public final class ConfigManager {
         this.minPasswordLength = config.getInt("password.min-length", 6);
         this.maxPasswordLength = config.getInt("password.max-length", 32);
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
+        // 密码字符规则：正则表达式，为空表示不限制
+        String patternStr = config.getString("password.pattern", "");
+        if (patternStr == null || patternStr.isBlank()) {
+            this.passwordPattern = null;
+        } else {
+            try {
+                this.passwordPattern = Pattern.compile(patternStr);
+            } catch (java.util.regex.PatternSyntaxException e) {
+                plugin.getLogger().warning(I18n.get("log.password_pattern_invalid", patternStr, e.getMessage()));
+                this.passwordPattern = null;
+            }
+        }
 
         // 注册限制
         this.maxAccountsPerIp = config.getInt("register.max-accounts-per-ip", 0);
@@ -208,6 +222,8 @@ public final class ConfigManager {
     public int minPasswordLength() { return minPasswordLength; }
     public int maxPasswordLength() { return maxPasswordLength; }
     public String passwordHashAlgorithm() { return passwordHashAlgorithm; }
+    /** 密码正则规则，null 表示不限制 */
+    public Pattern passwordPattern() { return passwordPattern; }
 
     // 注册限制
     public int maxAccountsPerIp() { return maxAccountsPerIp; }

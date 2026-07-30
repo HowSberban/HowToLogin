@@ -64,6 +64,31 @@ public final class AuthManager {
         }
     }
 
+    /**
+     * 检查同 IP 注册限制：已注册账号数 + 在线未注册玩家数。
+     * 防止多个未注册玩家同时进服后注册导致超限（无状态方案：
+     * 玩家退出后自动不再计入，注册成功后 hasAccount 返回 true 也不再计入）。
+     * @param uuid 待检查玩家（必须无账号）
+     * @param ip 玩家 IP
+     * @return true 允许进入，false 已超限
+     */
+    public boolean checkIpRegisterLimit(UUID uuid, String ip) {
+        int max = configManager.maxAccountsPerIp();
+        if (max <= 0) return true;
+        if (ip == null) return true;
+        int registered = dataManager.findByIp(ip).size();
+        int onlinePending = 0;
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getUniqueId().equals(uuid)) continue; // 排除自己
+            if (hasAccount(online.getUniqueId())) continue; // 已注册不计入
+            var addr = online.getAddress();
+            if (addr != null && ip.equals(addr.getAddress().getHostAddress())) {
+                onlinePending++;
+            }
+        }
+        return registered + onlinePending < max;
+    }
+
     // Registration
     public boolean register(Player player, String password) {
         UUID uuid = player.getUniqueId();
