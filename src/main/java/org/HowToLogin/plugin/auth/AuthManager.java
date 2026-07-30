@@ -35,6 +35,8 @@ public final class AuthManager {
     private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
     // 记录最近注销的玩家时间戳：5 秒内拒绝重连，确保 .dat 删除完成
     private final Map<UUID, Long> recentUnregister = new ConcurrentHashMap<>();
+    // 登录超时任务启动时间戳：用于判断超时任务是否为最新（重启时旧任务自动失效）
+    private final Map<UUID, Long> loginTimeoutStartedAt = new ConcurrentHashMap<>();
     // 缓存世界结构类型：26.1+ 采用新结构（players/data + dimensions/minecraft/overworld）
     private final boolean newWorldStructure;
     // 注销后拒绝重连时长（毫秒）
@@ -99,6 +101,23 @@ public final class AuthManager {
         dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
+        return true;
+    }
+
+    /**
+     * 强制注册：管理员绕过 IP 限制强制为玩家创建账号。
+     * 已有账号时返回 false。玩家在线时记录其当前 IP，离线时记为 "unknown"（下次登录时更新）。
+     * 不会自动登录，玩家需自行 /login。
+     */
+    public boolean forceRegister(UUID uuid, String password) {
+        if (dataManager.hasAccount(uuid)) return false;
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm());
+        Player online = Bukkit.getPlayer(uuid);
+        String ip = "unknown";
+        if (online != null && online.getAddress() != null) {
+            ip = online.getAddress().getAddress().getHostAddress();
+        }
+        dataManager.createPlayer(uuid, hash, ip);
         return true;
     }
 
@@ -379,6 +398,8 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         // 清除传送过渡期标记，防止下次登录时错误无敌
         invulnerablePending.remove(uuid);
+        // 清除超时任务标记（玩家已下线，旧任务无意义）
+        loginTimeoutStartedAt.remove(uuid);
     }
 
     // Status checks
@@ -396,6 +417,19 @@ public final class AuthManager {
 
     public void addPendingLogin(Player player) {
         pendingLogin.add(player.getUniqueId());
+    }
+
+    /** 记录登录超时任务启动时间，返回当前时间戳（用于触发时判断是否为最新任务） */
+    public long markLoginTimeoutStart(UUID uuid) {
+        long now = System.currentTimeMillis();
+        loginTimeoutStartedAt.put(uuid, now);
+        return now;
+    }
+
+    /** 判断指定时间戳是否为最新的超时任务启动时间（旧任务自动失效） */
+    public boolean isLatestLoginTimeout(UUID uuid, long startedAt) {
+        Long latest = loginTimeoutStartedAt.get(uuid);
+        return latest != null && latest == startedAt;
     }
 
     // 暴力破解防护：检查是否处于踢出期

@@ -96,6 +96,10 @@ public final class HTLogin extends JavaPlugin {
         return authManager;
     }
 
+    public PlayerListener getPlayerListener() {
+        return playerListener;
+    }
+
     /** PlaceholderAPI 软依赖：存在时注册变量扩展 */
     private void hookPlaceholderAPI() {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {

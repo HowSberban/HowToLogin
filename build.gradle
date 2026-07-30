@@ -72,7 +72,9 @@ processResources {
     filesMatching('paper-plugin.yml') {
         expand version: fullVersion
     }
+    // config.yml 含正则表达式，expand 会将其作为 Groovy 模板解析导致语法错误
+    // 改用 filter 逐行替换，只处理 ${version} 占位符
     filesMatching('config.yml') {
-        expand version: fullVersion
+        filter { line -> line.replace('${version}', fullVersion) }
     }
 }

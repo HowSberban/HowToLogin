@@ -63,6 +63,12 @@ public final class HTLoginCommand {
                         .then(argument("player", StringArgumentType.word())
                                 .suggests(SUGGEST_PLAYERS)
                                 .executes(this::handleForceLogin)))
+                // /htlogin forceregister <player> <password>
+                .then(literal("forceregister")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_PLAYERS)
+                                .then(argument("password", StringArgumentType.word())
+                                        .executes(this::handleForceRegister))))
                 .build();
     }
 
@@ -192,6 +198,32 @@ public final class HTLoginCommand {
         // 强制登录后传送回上次退出位置
         plugin.getAuthManager().returnToLogoutLocation(target);
         sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forcelogin_success", sender, targetName)));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    // 强制注册：绕过 IP 限制为玩家创建账号。玩家在线或离线均可，注册后需自行 /login
+    private int handleForceRegister(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
+        String password = StringArgumentType.getString(ctx, "password");
+        if (PasswordValidator.invalidPattern(plugin, sender, password)) return Command.SINGLE_SUCCESS;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
+            AuthManager auth = plugin.getAuthManager();
+            if (!auth.forceRegister(target.getUniqueId(), password)) {
+                sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forceregister_already_exists", sender, targetName)));
+                return;
+            }
+            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.forceregister_success", sender, targetName)));
+            // 在线玩家：切换为待登录状态，重启登录提醒和超时任务（注册提醒会因 hasAccount=true 自动取消）
+            Player online = Bukkit.getPlayerExact(targetName);
+            if (online != null) {
+                auth.addPendingLogin(online);
+                online.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", online)));
+                plugin.getPlayerListener().scheduleReminder(online, true);
+                plugin.getPlayerListener().scheduleLoginTimeout(online);
+            }
+        });
         return Command.SINGLE_SUCCESS;
     }
 }

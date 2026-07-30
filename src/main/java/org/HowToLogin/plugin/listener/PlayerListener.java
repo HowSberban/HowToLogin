@@ -164,15 +164,19 @@ public final class PlayerListener implements Listener {
         }
     }
 
-    /** 启动登录超时踢出任务（onJoin 和 logout 共用） */
+    /** 启动登录超时踢出任务（onJoin 和 forceRegister 共用，重复调用会自动作废旧任务） */
     public void scheduleLoginTimeout(Player player) {
         int timeout = plugin.getConfigManager().loginTimeout();
         if (timeout <= 0) return;
 
+        // 记录启动时间，触发时校验是否为最新任务（forceRegister 重启超时后旧任务自动失效）
+        long startedAt = authManager.markLoginTimeoutStart(player.getUniqueId());
         // 20 tick = 1 秒
         long delayTicks = timeout * 20L;
         // Paper 1.20+ 统一调度器 API，兼容 Folia（在实体所在区域调度）
         player.getScheduler().runDelayed(plugin, scheduledTask -> {
+            // 非最新任务直接放弃（forceRegister 已重启超时计时）
+            if (!authManager.isLatestLoginTimeout(player.getUniqueId(), startedAt)) return;
             if (!authManager.isLoggedIn(player) && player.isOnline()) {
                 if (plugin.getConfigManager().kickOnTimeout()) {
                     player.kick(HTLogin.legacy(I18n.get("listener.login_timeout", player)));
