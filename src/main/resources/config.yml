@@ -1,7 +1,7 @@
 # HTLogin 配置文件
 
-# 配置文件版本，请勿修改
-version: ${configVersion}
+# 配置文件版本（完整版本号），请勿修改
+version: ${version}
 
 # 数据库设置
 database:

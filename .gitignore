@@ -128,6 +128,3 @@ players.db-wal
 players.db-shm
 identifier.sqlite
 
-# 语言文件版本标记（运行时生成）
-.lang_version
-

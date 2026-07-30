@@ -67,15 +67,12 @@ tasks.withType(JavaCompile).configureEach {
 
 processResources {
     def fullVersion = version
-    // 配置文件版本只取前两位（major.minor），patch 版本仅修 bug 不改配置，不触发覆盖
-    def parts = fullVersion.split('-')[0].split('\\.')
-    def configVersion = parts.length >= 2 ? "${parts[0]}.${parts[1]}" : fullVersion
-    inputs.properties([version: fullVersion, configVersion: configVersion])
+    inputs.properties([version: fullVersion])
     filteringCharset 'UTF-8'
     filesMatching('paper-plugin.yml') {
         expand version: fullVersion
     }
     filesMatching('config.yml') {
-        expand configVersion: configVersion
+        expand version: fullVersion
     }
 }
