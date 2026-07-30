@@ -13,6 +13,8 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.UUID;
+
 import static io.papermc.paper.command.brigadier.Commands.argument;
 import static io.papermc.paper.command.brigadier.Commands.literal;
 
@@ -21,9 +23,11 @@ import static io.papermc.paper.command.brigadier.Commands.literal;
  */
 public final class UnregisterCommand {
 
+    private final HTLogin plugin;
     private final AuthManager authManager;
 
-    public UnregisterCommand(AuthManager authManager) {
+    public UnregisterCommand(HTLogin plugin, AuthManager authManager) {
+        this.plugin = plugin;
         this.authManager = authManager;
     }
 
@@ -53,22 +57,27 @@ public final class UnregisterCommand {
         CommandSender sender = ctx.getSource().getSender();
         String targetName = StringArgumentType.getString(ctx, "player");
 
-        // 使用 getOfflinePlayerIfCached 避免阻塞主线程（不会发起 Mojang API 请求）
-        // 返回 null 表示该玩家从未进服，必然未注册
-        OfflinePlayer target = Bukkit.getOfflinePlayerIfCached(targetName);
+        // 异步解析玩家：getOfflinePlayer 可能发起 Mojang API 请求（阻塞），不能在主线程调用
+        // 之前用 getOfflinePlayerIfCached 导致服务器重启后找不到未进服的玩家
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            // 优先检查在线玩家（getOfflinePlayer 内部也会检查，但这里单独检查以便后续踢出）
+            Player onlinePlayer = Bukkit.getPlayerExact(targetName);
+            // getOfflinePlayer 会依次检查：在线玩家 → 缓存 → playerdata 目录 → Mojang API
+            OfflinePlayer target = onlinePlayer != null ? onlinePlayer : Bukkit.getOfflinePlayer(targetName);
+            UUID targetUuid = target.getUniqueId();
 
-        if (target == null || !authManager.unregister(target.getUniqueId())) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("unregister.not_found", sender)));
-            return 0;
-        }
+            if (!authManager.unregister(targetUuid)) {
+                sender.sendMessage(HTLogin.legacy(I18n.get("unregister.not_found", sender)));
+                return;
+            }
 
-        // 若目标在线则踢出，下次进服需重新注册
-        Player online = Bukkit.getPlayer(target.getUniqueId());
-        if (online != null) {
-            online.kick(HTLogin.legacy(I18n.get("unregister.kick", online)));
-        }
+            // 若目标在线则踢出，下次进服需重新注册
+            if (onlinePlayer != null) {
+                onlinePlayer.kick(HTLogin.legacy(I18n.get("unregister.kick", onlinePlayer)));
+            }
 
-        sender.sendMessage(HTLogin.legacy(I18n.get("unregister.success", sender, targetName)));
+            sender.sendMessage(HTLogin.legacy(I18n.get("unregister.success", sender, targetName)));
+        });
         return Command.SINGLE_SUCCESS;
     }
 }

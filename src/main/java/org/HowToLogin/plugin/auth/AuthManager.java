@@ -16,6 +16,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 public final class AuthManager {
 
@@ -32,11 +33,31 @@ public final class AuthManager {
     private final Map<UUID, Long> kickUntil = new ConcurrentHashMap<>();
     // 标记待删除原版数据的玩家（unregister 后等待 PlayerQuitEvent 触发时删除 .dat）
     private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
+    // 缓存世界结构类型：26.1+ 采用新结构（players/data + dimensions/minecraft/overworld）
+    private final boolean newWorldStructure;
 
     public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
         this.plugin = plugin;
         this.dataManager = dataManager;
         this.configManager = configManager;
+        this.newWorldStructure = detectNewWorldStructure();
+    }
+
+    /**
+     * 检测服务端是否使用 26.1+ 的新世界文件结构。
+     * Bukkit.getBukkitVersion() 返回如 "1.21.11-R0.1-SNAPSHOT" 或 "26.1.2-R0.1-SNAPSHOT"。
+     * 26.1+ 主版本号 >= 26，旧版 1.x 主版本号始终为 1。
+     */
+    private static boolean detectNewWorldStructure() {
+        String version = Bukkit.getBukkitVersion();
+        int dash = version.indexOf('-');
+        String nums = dash > 0 ? version.substring(0, dash) : version;
+        String[] parts = nums.split("\\.");
+        try {
+            return Integer.parseInt(parts[0]) >= 26;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     // Registration
@@ -222,37 +243,62 @@ public final class AuthManager {
     }
 
     /**
-     * 在 PlayerQuitEvent 中调用：玩家退出时服务器已保存 .dat 并释放文件锁，
-     * 此时删除最安全。如果玩家快速重新加入，新会话不会受影响（新 .dat 尚未创建）。
-     * 返回 true 表示已处理删除（调用方无需再处理）。
+     * 在 PlayerQuitEvent 中调用：延迟异步删除玩家 .dat 文件。
+     * PlayerQuitEvent 触发时服务器尚未保存 .dat，直接删除会被后续保存覆盖，
+     * 因此延迟 1 秒，等服务器完成保存后再删除。
      */
     public void tryDeletePlayerDataOnQuit(UUID uuid) {
         if (!pendingDatDelete.remove(uuid)) return;
-        deletePlayerData(uuid);
+        Bukkit.getAsyncScheduler().runDelayed(plugin, task -> deletePlayerData(uuid), 1, TimeUnit.SECONDS);
     }
 
     /**
      * 删除 Minecraft 原版玩家数据文件（player.dat 及其备份）。
-     * 实时检测目录：26.1+ 使用 players/data，之前使用 playerdata。
-     * 优先检查新结构：升级后旧 playerdata 目录可能残留但不再使用。
-     * 两个目录都不存在时（首次启动尚未有玩家进服），默认用新结构。
-     * 应在 PlayerQuitEvent 中调用（服务器已保存 .dat 并释放文件锁）。
+     * 目录结构兼容（通过服务端版本判断，构造时缓存）：
+     *   - 旧版（< 26.1）：world/playerdata（worldDir 即世界根目录）
+     *   - 26.1+：world/players/data（worldDir 是维度目录 world/dimensions/minecraft/overworld，
+     *     玩家数据在其上级 3 层的世界根目录下）
+     * 由 tryDeletePlayerDataOnQuit 延迟调用（服务器保存 .dat 后再删除）。
      */
     private void deletePlayerData(UUID uuid) {
         World world = Bukkit.getWorlds().getFirst();
         File worldDir = world.getWorldFolder();
-        File newDir = new File(worldDir, "players/data");
-        File oldDir = new File(worldDir, "playerdata");
-        // 优先检查新结构（26.1+），旧目录可能残留但不再使用
-        File dir = newDir.isDirectory() ? newDir : oldDir;
-        File datFile = new File(dir, uuid + ".dat");
-        File datOldFile = new File(dir, uuid + ".dat_old");
+
+        File playerDataDir;
+        if (newWorldStructure) {
+            // 26.1+：worldDir 是维度目录，向上 3 层到世界根目录
+            File worldRoot = worldDir.getParentFile(); // minecraft
+            if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // dimensions
+            if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // world 根
+            playerDataDir = worldRoot != null ? resolvePlayerDataDir(worldRoot) : null;
+        } else {
+            // 旧版：worldDir 即世界根目录
+            playerDataDir = resolvePlayerDataDir(worldDir);
+        }
+
+        if (playerDataDir == null) {
+            plugin.getLogger().warning("无法找到玩家数据目录，起始查找路径: " + worldDir.getAbsolutePath());
+            return;
+        }
+        File datFile = new File(playerDataDir, uuid + ".dat");
+        File datOldFile = new File(playerDataDir, uuid + ".dat_old");
         if (datFile.exists() && !datFile.delete()) {
             plugin.getLogger().warning("无法删除玩家数据文件: " + datFile.getAbsolutePath());
         }
         if (datOldFile.exists() && !datOldFile.delete()) {
             plugin.getLogger().warning("无法删除玩家数据备份文件: " + datOldFile.getAbsolutePath());
         }
+    }
+
+    /**
+     * 检查目录下是否存在玩家数据目录（优先 26.1+ 的 players/data，其次旧版 playerdata）。
+     * 不存在返回 null。
+     */
+    private File resolvePlayerDataDir(File dir) {
+        File newDir = new File(dir, "players/data");
+        if (newDir.isDirectory()) return newDir;
+        File oldDir = new File(dir, "playerdata");
+        return oldDir.isDirectory() ? oldDir : null;
     }
 
     // 玩家退出时调用 — 清理会话状态
