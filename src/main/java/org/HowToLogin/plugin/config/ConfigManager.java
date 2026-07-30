@@ -141,7 +141,7 @@ public final class ConfigManager {
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
         // 密码字符规则：正则表达式，为空表示不限制
         String patternStr = config.getString("password.pattern", "");
-        if (patternStr == null || patternStr.isBlank()) {
+        if (patternStr.isBlank()) {
             this.passwordPattern = null;
         } else {
             try {
