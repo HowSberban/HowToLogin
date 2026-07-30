@@ -18,6 +18,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+// 表 players 在运行时由 initTable() 创建，IDE 静态分析无法解析，抑制 SqlResolve 检查
+@SuppressWarnings("SqlResolve")
 public final class PlayerDataManager {
 
     private final HTLogin plugin;

@@ -117,3 +117,17 @@ runs/
 
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
 !gradle-wrapper.jar
+
+# VSCode
+.vscode/
+
+# 项目运行时生成的数据文件（SQLite 数据库，包含真实玩家数据，禁止入库）
+players.db
+players.db-journal
+players.db-wal
+players.db-shm
+identifier.sqlite
+
+# 语言文件版本标记（运行时生成）
+.lang_version
+
