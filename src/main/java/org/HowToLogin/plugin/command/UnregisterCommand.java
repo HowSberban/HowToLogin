@@ -21,6 +21,7 @@ import static io.papermc.paper.command.brigadier.Commands.literal;
 /**
  * unregister 管理命令，使用 brigadier 原生注册以支持玩家名补全。
  */
+@SuppressWarnings("SameReturnValue")
 public final class UnregisterCommand {
 
     private final HTLogin plugin;

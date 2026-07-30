@@ -12,6 +12,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+// preventXxx() 方法在调用方均以 ! 守卫子句形式使用（if (!preventXxx()) return;），
+// IDE 误报"始终反转"，但反转方法逻辑会导致与方法名语义相反，破坏统一的 preventXxx 设计模式
+@SuppressWarnings("BooleanMethodIsAlwaysInverted")
 public final class ConfigManager {
 
     private final HTLogin plugin;
@@ -227,10 +230,10 @@ public final class ConfigManager {
     public boolean preventMove() { return preventMove; }
     public boolean preventLook() { return preventLook; }
     public boolean preventChat() { return preventChat; }
-    public boolean preventCommand() { return !preventCommand; }
+    public boolean preventCommand() { return preventCommand; }
     public List<String> commandWhitelist() { return commandWhitelist; }
     public boolean preventWorldInteraction() { return preventWorldInteraction; }
-    public boolean preventInventory() { return !preventInventory; }
+    public boolean preventInventory() { return preventInventory; }
 
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }

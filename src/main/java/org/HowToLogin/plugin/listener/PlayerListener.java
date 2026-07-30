@@ -47,6 +47,14 @@ public final class PlayerListener implements Listener {
             return;
         }
 
+        // 注销后 5 秒内拒绝重连，确保 .dat 删除完成
+        if (authManager.isRecentlyUnregistered(uuid)) {
+            long remaining = authManager.getRecentUnregisterRemaining(uuid);
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    HTLogin.legacy(I18n.get("unregister.recently_deleted", remaining)));
+            return;
+        }
+
         // 同一 IP 账号数量限制：仅对新玩家（无账号）检查，已注册玩家允许进入
         int maxAccounts = plugin.getConfigManager().maxAccountsPerIp();
         if (maxAccounts > 0 && !authManager.hasAccount(uuid)) {
@@ -131,7 +139,6 @@ public final class PlayerListener implements Listener {
 
         var conn = event.getConnection();
         java.util.UUID uuid = conn.getProfile().getId();
-        conn.getClientAddress();
         String ip = conn.getClientAddress().getAddress().getHostAddress();
 
         // IP 自动登录的玩家直接在退出位置出生，避免后续传送
@@ -234,7 +241,7 @@ public final class PlayerListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onCommand(PlayerCommandPreprocessEvent event) {
-        if (plugin.getConfigManager().preventCommand()) return;
+        if (!plugin.getConfigManager().preventCommand()) return;
 
         Player player = event.getPlayer();
         if (authManager.isLoggedIn(player)) return;
@@ -328,7 +335,7 @@ public final class PlayerListener implements Listener {
     // 未登录玩家只能补全白名单命令，防止通过 Tab 遍历服务器所有命令
     @EventHandler(priority = EventPriority.LOWEST)
     public void onTabComplete(TabCompleteEvent event) {
-        if (plugin.getConfigManager().preventCommand()) return;
+        if (!plugin.getConfigManager().preventCommand()) return;
         if (!(event.getSender() instanceof Player player)) return;
         if (authManager.isLoggedIn(player)) return;
 
@@ -355,7 +362,7 @@ public final class PlayerListener implements Listener {
     // 容器点击（含创造模式）
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryClick(InventoryClickEvent event) {
-        if (plugin.getConfigManager().preventInventory()) return;
+        if (!plugin.getConfigManager().preventInventory()) return;
         if (event.getWhoClicked() instanceof Player player
                 && !authManager.isLoggedIn(player)) {
             event.setCancelled(true);
@@ -365,7 +372,7 @@ public final class PlayerListener implements Listener {
     // 容器拖拽
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInventoryDrag(InventoryDragEvent event) {
-        if (plugin.getConfigManager().preventInventory()) return;
+        if (!plugin.getConfigManager().preventInventory()) return;
         if (event.getWhoClicked() instanceof Player player
                 && !authManager.isLoggedIn(player)) {
             event.setCancelled(true);
@@ -384,7 +391,7 @@ public final class PlayerListener implements Listener {
     // 物品消耗（进食、喝药水等）
     @EventHandler(priority = EventPriority.LOWEST)
     public void onItemConsume(PlayerItemConsumeEvent event) {
-        if (plugin.getConfigManager().preventInventory()) return;
+        if (!plugin.getConfigManager().preventInventory()) return;
         if (!authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }
@@ -393,7 +400,7 @@ public final class PlayerListener implements Listener {
     // 副手切换
     @EventHandler(priority = EventPriority.LOWEST)
     public void onSwapHandItems(PlayerSwapHandItemsEvent event) {
-        if (plugin.getConfigManager().preventInventory()) return;
+        if (!plugin.getConfigManager().preventInventory()) return;
         if (!authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);
         }

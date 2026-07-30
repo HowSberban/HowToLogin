@@ -1,6 +1,7 @@
 package org.howtologin.plugin.auth;
 
 import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
@@ -16,7 +17,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 public final class AuthManager {
 
@@ -33,8 +33,12 @@ public final class AuthManager {
     private final Map<UUID, Long> kickUntil = new ConcurrentHashMap<>();
     // 标记待删除原版数据的玩家（unregister 后等待 PlayerQuitEvent 触发时删除 .dat）
     private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
+    // 记录最近注销的玩家时间戳：5 秒内拒绝重连，确保 .dat 删除完成
+    private final Map<UUID, Long> recentUnregister = new ConcurrentHashMap<>();
     // 缓存世界结构类型：26.1+ 采用新结构（players/data + dimensions/minecraft/overworld）
     private final boolean newWorldStructure;
+    // 注销后拒绝重连时长（毫秒）
+    private static final long UNREGISTER_RECONNECT_DELAY = 5000L;
 
     public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
         this.plugin = plugin;
@@ -229,6 +233,8 @@ public final class AuthManager {
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
+        // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
+        recentUnregister.put(uuid, System.currentTimeMillis());
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
             if (Bukkit.getPlayer(uuid) != null) {
@@ -236,20 +242,57 @@ public final class AuthManager {
                 pendingDatDelete.add(uuid);
             } else {
                 // 玩家离线：无文件锁，直接删除
-                deletePlayerData(uuid);
+                deletePlayerDataWithRetry(uuid, 0);
             }
         }
         return true;
     }
 
+    /** 检查玩家是否在注销后的拒绝重连期内（5 秒） */
+    public boolean isRecentlyUnregistered(UUID uuid) {
+        Long time = recentUnregister.get(uuid);
+        if (time == null) return false;
+        if (System.currentTimeMillis() - time >= UNREGISTER_RECONNECT_DELAY) {
+            recentUnregister.remove(uuid);
+            return false;
+        }
+        return true;
+    }
+
+    /** 获取拒绝重连剩余秒数 */
+    public long getRecentUnregisterRemaining(UUID uuid) {
+        Long time = recentUnregister.get(uuid);
+        if (time == null) return 0;
+        long remaining = UNREGISTER_RECONNECT_DELAY - (System.currentTimeMillis() - time);
+        return remaining > 0 ? (remaining + 999) / 1000 : 0;
+    }
+
     /**
-     * 在 PlayerQuitEvent 中调用：延迟异步删除玩家 .dat 文件。
-     * PlayerQuitEvent 触发时服务器尚未保存 .dat，直接删除会被后续保存覆盖，
-     * 因此延迟 1 秒，等服务器完成保存后再删除。
+     * 在 PlayerQuitEvent 中调用：异步重试删除玩家 .dat 文件。
+     * PlayerQuitEvent 触发时服务器尚未保存 .dat，直接删除会被后续保存覆盖。
+     * 采用重试机制：初始延迟 500ms 后尝试删除，若文件仍存在则每 300ms 重试一次，
+     * 5 秒内持续尝试（约 15 次），确保服务器完成保存后能可靠删除。
      */
     public void tryDeletePlayerDataOnQuit(UUID uuid) {
         if (!pendingDatDelete.remove(uuid)) return;
-        Bukkit.getAsyncScheduler().runDelayed(plugin, task -> deletePlayerData(uuid), 1, TimeUnit.SECONDS);
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid, 0));
+    }
+
+    /** 重试删除玩家数据，5 秒内持续尝试（首次 500ms，后续每 300ms） */
+    private void deletePlayerDataWithRetry(UUID uuid, long elapsed) {
+        try {
+            Thread.sleep(elapsed == 0 ? 500 : 300);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        long newElapsed = elapsed + (elapsed == 0 ? 500 : 300);
+        if (deletePlayerData(uuid)) return;
+        if (newElapsed >= 5000) {
+            plugin.getLogger().warning(I18n.get("log.delete_player_data_failed", uuid));
+            return;
+        }
+        deletePlayerDataWithRetry(uuid, newElapsed);
     }
 
     /**
@@ -258,9 +301,10 @@ public final class AuthManager {
      *   - 旧版（< 26.1）：world/playerdata（worldDir 即世界根目录）
      *   - 26.1+：world/players/data（worldDir 是维度目录 world/dimensions/minecraft/overworld，
      *     玩家数据在其上级 3 层的世界根目录下）
-     * 由 tryDeletePlayerDataOnQuit 延迟调用（服务器保存 .dat 后再删除）。
+     * 由 tryDeletePlayerDataOnQuit 异步重试调用（服务器保存 .dat 后再删除）。
+     * @return true 表示文件已删除或不存在（成功）；false 表示文件仍存在（需重试）
      */
-    private void deletePlayerData(UUID uuid) {
+    private boolean deletePlayerData(UUID uuid) {
         World world = Bukkit.getWorlds().getFirst();
         File worldDir = world.getWorldFolder();
 
@@ -277,17 +321,19 @@ public final class AuthManager {
         }
 
         if (playerDataDir == null) {
-            plugin.getLogger().warning("无法找到玩家数据目录，起始查找路径: " + worldDir.getAbsolutePath());
-            return;
+            plugin.getLogger().warning(I18n.get("log.player_data_dir_not_found", worldDir.getAbsolutePath()));
+            return true; // 目录不存在视为无需删除，停止重试
         }
         File datFile = new File(playerDataDir, uuid + ".dat");
         File datOldFile = new File(playerDataDir, uuid + ".dat_old");
-        if (datFile.exists() && !datFile.delete()) {
-            plugin.getLogger().warning("无法删除玩家数据文件: " + datFile.getAbsolutePath());
-        }
+        // 删除 .dat_old（备份文件，删除失败不影响）
         if (datOldFile.exists() && !datOldFile.delete()) {
-            plugin.getLogger().warning("无法删除玩家数据备份文件: " + datOldFile.getAbsolutePath());
+            plugin.getLogger().warning(I18n.get("log.delete_player_data_backup_failed", datOldFile.getAbsolutePath()));
         }
+        // 删除 .dat（主文件，删除结果决定是否重试）
+        if (!datFile.exists()) return true; // 文件已不存在，视为删除成功
+        // delete() 返回 true 表示删除成功；false 表示文件被锁（服务器仍在保存），返回 false 触发重试
+        return datFile.delete();
     }
 
     /**
@@ -350,12 +396,14 @@ public final class AuthManager {
         return remaining > 0 ? remaining / 1000 : 0;
     }
 
-    /** 清理已过期的踢出记录和失败计数（reload 时调用，防止内存泄漏） */
+    /** 清理已过期的踢出记录、失败计数和注销拒绝重连记录（reload 时调用，防止内存泄漏） */
     public void cleanupExpiredStates() {
         long now = System.currentTimeMillis();
         kickUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
         // 失败计数未达阈值的条目也应清理（玩家可能已离线）
         failedAttempts.entrySet().removeIf(entry -> entry.getValue() < configManager.failMaxAttempts());
+        // 清理已过期的注销拒绝重连记录
+        recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
     }
 
     // ===== 坐标保护相关 =====

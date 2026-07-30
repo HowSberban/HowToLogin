@@ -3,6 +3,7 @@ package org.howtologin.plugin.data;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.howtologin.plugin.HTLogin;
+import org.howtologin.plugin.I18n;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -69,7 +70,7 @@ public final class PlayerDataManager {
             // SQLite：单连接即可，避免文件锁竞争
             File dbFile = new File(plugin.getDataFolder(), "players.db");
             if (!dbFile.getParentFile().exists() && !dbFile.getParentFile().mkdirs()) {
-                plugin.getLogger().warning("无法创建数据目录: " + dbFile.getParentFile().getAbsolutePath());
+                plugin.getLogger().warning(I18n.get("log.create_data_dir_failed", dbFile.getParentFile().getAbsolutePath()));
             }
             config.setJdbcUrl("jdbc:sqlite:" + dbFile.getAbsolutePath());
             // SQLite 写入依赖文件锁，多连接会阻塞，强制单连接
@@ -93,7 +94,7 @@ public final class PlayerDataManager {
                     ")"
             );
         } catch (SQLException e) {
-            plugin.getLogger().severe("无法初始化数据库表: " + e.getMessage());
+            plugin.getLogger().severe(I18n.get("log.init_table_failed", e.getMessage()));
         }
     }
 
@@ -116,7 +117,7 @@ public final class PlayerDataManager {
                 players.put(uuid, data);
             }
         } catch (SQLException e) {
-            plugin.getLogger().severe("无法加载玩家数据: " + e.getMessage());
+            plugin.getLogger().severe(I18n.get("log.load_players_failed", e.getMessage()));
         }
     }
 
@@ -138,7 +139,7 @@ public final class PlayerDataManager {
             bindPlayerData(ps, data);
             ps.executeUpdate();
         } catch (SQLException e) {
-            plugin.getLogger().severe("无法保存玩家数据 (" + data.uuid() + "): " + e.getMessage());
+            plugin.getLogger().severe(I18n.get("log.save_player_failed", data.uuid(), e.getMessage()));
         }
     }
 
@@ -158,7 +159,7 @@ public final class PlayerDataManager {
                 throw e;
             }
         } catch (SQLException e) {
-            plugin.getLogger().severe("无法批量保存玩家数据: " + e.getMessage());
+            plugin.getLogger().severe(I18n.get("log.save_all_failed", e.getMessage()));
         }
     }
 
@@ -200,7 +201,7 @@ public final class PlayerDataManager {
                 ps.setString(1, uuid.toString());
                 ps.executeUpdate();
             } catch (SQLException e) {
-                plugin.getLogger().severe("无法删除玩家数据 (" + uuid + "): " + e.getMessage());
+                plugin.getLogger().severe(I18n.get("log.delete_player_failed", uuid, e.getMessage()));
             }
         });
     }
@@ -216,7 +217,7 @@ public final class PlayerDataManager {
                 ps.setString(2, uuid.toString());
                 ps.executeUpdate();
             } catch (SQLException e) {
-                plugin.getLogger().severe("无法更新密码 (" + uuid + "): " + e.getMessage());
+                plugin.getLogger().severe(I18n.get("log.update_password_failed", uuid, e.getMessage()));
             }
         });
     }
