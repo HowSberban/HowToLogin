@@ -12,6 +12,9 @@ loader: org.howtologin.plugin.PluginLoaderImpl
 
 dependencies:
   server:
+    packetevents:
+      load: BEFORE
+      required: true
     PlaceholderAPI:
       load: BEFORE
       required: false

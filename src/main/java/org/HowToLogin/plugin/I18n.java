@@ -8,10 +8,12 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -31,7 +33,7 @@ public final class I18n {
     // 解析文件名中的 locale 后缀：zh_CN.properties -> zh_CN
     private static final Pattern LOCALE_PATTERN = Pattern.compile("^(.+)\\.properties$");
 
-    private static final Map<String, Properties> bundles = new HashMap<>();
+    private static final Map<String, Properties> bundles = new ConcurrentHashMap<>();
     private static String defaultLocale = "zh_CN";
     private static boolean clientLanguageDetection = true;
     private static Plugin plugin;
@@ -54,9 +56,12 @@ public final class I18n {
         loadAll();
     }
 
-    /** 加载插件 lang/ 目录下所有 *.properties 语言文件 */
+    /**
+     * 加载插件 lang/ 目录下所有 *.properties 语言文件。
+     * 先构建新 map 再整体替换，避免 reload 期间其它线程读到空 map 导致回退到 key 名显示。
+     */
     public static void loadAll() {
-        bundles.clear();
+        Map<String, Properties> newBundles = new HashMap<>();
         File langDir = new File(plugin.getDataFolder(), LANG_DIR);
         File[] files = langDir.listFiles((dir, name) -> name.endsWith(".properties"));
         if (files != null) {
@@ -68,13 +73,16 @@ public final class I18n {
                     try (BufferedReader reader = new BufferedReader(
                             new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
                         loadPropertiesWithNewlines(props, reader);
-                        bundles.put(locale, props);
+                        newBundles.put(locale, props);
                     } catch (IOException e) {
                         plugin.getLogger().warning("无法加载语言文件 " + file.getName() + "：" + e.getMessage());
                     }
                 }
             }
         }
+        // 原子替换：clear + putAll，ConcurrentHashMap 保证读线程不会看到中间状态
+        bundles.clear();
+        bundles.putAll(newBundles);
         if (bundles.isEmpty()) {
             plugin.getLogger().warning("未找到任何语言文件，请检查插件目录");
         }
@@ -122,7 +130,11 @@ public final class I18n {
                     value = rest.substring(0, rest.length() - 3);
                 } else {
                     // 多行模式：读取直到 """
-                    value = readMultilineValue(reader, rest);
+                    String[] result = readMultilineValue(reader, rest);
+                    value = result[0];
+                    if ("false".equals(result[1])) {
+                        plugin.getLogger().warning("语言文件中 key \"" + key + "\" 的三引号值未闭合");
+                    }
                 }
             }
 
@@ -130,24 +142,32 @@ public final class I18n {
         }
     }
 
-    /** 读取三引号多行值，直到遇到单独的 """ 行或行尾 """ */
-    private static String readMultilineValue(BufferedReader reader, String firstLine) throws IOException {
+    /**
+     * 读取三引号多行值，直到遇到单独的 """ 行或行尾 """。
+     * @return [0] = 拼接后的值；[1] = "true" 表示正常闭合，"false" 表示未闭合（读到 EOF）
+     */
+    private static String[] readMultilineValue(BufferedReader reader, String firstLine) throws IOException {
         List<String> lines = new ArrayList<>();
         if (!firstLine.isEmpty()) {
             lines.add(firstLine);
         }
+        boolean closed = false;
         String nextLine;
         while ((nextLine = reader.readLine()) != null) {
             // 整行是 """，结束
-            if (nextLine.equals("\"\"\"")) break;
+            if (nextLine.equals("\"\"\"")) {
+                closed = true;
+                break;
+            }
             // 行尾是 """，结束（取前面的内容）
             if (nextLine.endsWith("\"\"\"")) {
                 lines.add(nextLine.substring(0, nextLine.length() - 3));
+                closed = true;
                 break;
             }
             lines.add(nextLine);
         }
-        return String.join("\n", lines);
+        return new String[]{String.join("\n", lines), closed ? "true" : "false"};
     }
 
     /** 统计字符串末尾连续反斜杠的数量 */
@@ -196,6 +216,14 @@ public final class I18n {
     /** 重新加载所有语言文件（/htlogin reload 调用） */
     public static void reload() {
         loadAll();
+    }
+
+    /** 清理静态状态（onDisable 调用，避免热卸载时类加载器无法回收） */
+    public static void shutdown() {
+        bundles.clear();
+        plugin = null;
+        defaultLocale = "zh_CN";
+        clientLanguageDetection = true;
     }
 
     /** 设置默认语言（控制台日志和 fallback 使用），由 ConfigManager 加载配置后调用 */

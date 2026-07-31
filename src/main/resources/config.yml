@@ -90,8 +90,20 @@ protection:
   # 与CatSeedLogin不同，开启此保护不会导致玩家位置丢失）
   pos:
     enabled: false
-    # 在世界出生点周围的随机半径（方块数），每次加入位置不同，避免玩家堆积
+    # 坐标模式：random（随机）或 fixed（固定坐标）
+    mode: random
+    # 随机模式：在世界出生点周围的随机半径（方块数），每次加入位置不同，避免玩家堆积
     spawn-radius: 10
+    # mode=fixed 时使用此坐标
+    fixed:
+      x: 0
+      y: 64
+      z: 0
+      yaw: 0
+      pitch: 0
+  # 背包保护：未登录玩家无法查看自己的背包
+  inventory:
+    enabled: false
 
 # 通用设置
 settings:

@@ -59,7 +59,14 @@ public final class ConfigManager {
 
     // 登录前保护
     private boolean protectionPosEnabled;
+    private String protectionPosMode;
     private int protectionPosSpawnRadius;
+    private double protectionPosFixedX;
+    private double protectionPosFixedY;
+    private double protectionPosFixedZ;
+    private float protectionPosFixedYaw;
+    private float protectionPosFixedPitch;
+    private boolean protectionInventoryEnabled;
 
     // 通用设置
     private boolean realUnreg;
@@ -181,7 +188,15 @@ public final class ConfigManager {
 
         // 登录前保护
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
+        this.protectionPosMode = config.getString("protection.pos.mode", "random");
         this.protectionPosSpawnRadius = config.getInt("protection.pos.spawn-radius", 10);
+        this.protectionPosFixedX = config.getDouble("protection.pos.fixed.x", 0);
+        this.protectionPosFixedY = config.getDouble("protection.pos.fixed.y", 64);
+        this.protectionPosFixedZ = config.getDouble("protection.pos.fixed.z", 0);
+        this.protectionPosFixedYaw = (float) config.getDouble("protection.pos.fixed.yaw", 0);
+        this.protectionPosFixedPitch = (float) config.getDouble("protection.pos.fixed.pitch", 0);
+        // 背包保护：未登录玩家的背包和末影箱无法被其他玩家查看
+        this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", true);
 
         // 通用设置
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
@@ -257,7 +272,14 @@ public final class ConfigManager {
 
     // 登录前保护
     public boolean protectionPosEnabled() { return protectionPosEnabled; }
+    public String protectionPosMode() { return protectionPosMode; }
     public int protectionPosSpawnRadius() { return protectionPosSpawnRadius; }
+    public double protectionPosFixedX() { return protectionPosFixedX; }
+    public double protectionPosFixedY() { return protectionPosFixedY; }
+    public double protectionPosFixedZ() { return protectionPosFixedZ; }
+    public float protectionPosFixedYaw() { return protectionPosFixedYaw; }
+    public float protectionPosFixedPitch() { return protectionPosFixedPitch; }
+    public boolean protectionInventoryEnabled() { return protectionInventoryEnabled; }
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }

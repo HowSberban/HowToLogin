@@ -101,6 +101,7 @@ public final class AuthManager {
         dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
+        onLoginSuccess(player);
         return true;
     }
 
@@ -151,6 +152,7 @@ public final class AuthManager {
             // 登录成功，清零失败计数
             failedAttempts.remove(uuid);
             kickUntil.remove(uuid);
+            onLoginSuccess(player);
             return true;
         }
 
@@ -202,6 +204,7 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
+        onLoginSuccess(player);
     }
 
     // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
@@ -239,6 +242,7 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
+        onLoginSuccess(player);
     }
 
     // Logout
@@ -407,6 +411,10 @@ public final class AuthManager {
         return loggedIn.contains(player.getUniqueId());
     }
 
+    public boolean isLoggedIn(UUID uuid) {
+        return loggedIn.contains(uuid);
+    }
+
     public boolean hasAccount(Player player) {
         return hasAccount(player.getUniqueId());
     }
@@ -539,8 +547,19 @@ public final class AuthManager {
      * 登录后立即传送到上次退出位置，离开临时位置。
      * 默认尝试 10 次，全部失败则回退到世界出生点（玩家无敌，出生点不安全也不会死）。
      * 此方法会阻塞等待区块加载，应在异步线程中调用。
+     * 若配置为固定坐标模式，直接返回配置的固定位置。
      */
     public Location findSafeAuthSpawn(World world) {
+        // 固定坐标模式：直接使用配置的坐标
+        if ("fixed".equals(configManager.protectionPosMode())) {
+            return new Location(world,
+                    configManager.protectionPosFixedX(),
+                    configManager.protectionPosFixedY(),
+                    configManager.protectionPosFixedZ(),
+                    configManager.protectionPosFixedYaw(),
+                    configManager.protectionPosFixedPitch());
+        }
+
         Location spawn = world.getSpawnLocation();
         int radius = configManager.protectionPosSpawnRadius();
         ThreadLocalRandom random = ThreadLocalRandom.current();
@@ -586,5 +605,16 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return null;
         return PlayerDataManager.deserializeLocation(data.logoutLocation());
+    }
+
+    /**
+     * 登录/注册成功后的物品状态恢复：
+     * 未登录期间数据包监听器清空了该玩家的背包和装备（仅本人视角，他人不受影响）。
+     * 登录后调用 updateInventory 让服务器重发真实背包内容（含装备槽）。
+     *
+     * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（updateInventory 非线程安全）。
+     */
+    public void onLoginSuccess(Player player) {
+        player.getScheduler().run(plugin, task -> player.updateInventory(), null);
     }
 }

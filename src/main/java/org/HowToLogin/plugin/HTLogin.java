@@ -1,5 +1,6 @@
 package org.howtologin.plugin;
 
+import com.github.retrooper.packetevents.PacketEvents;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
@@ -9,6 +10,7 @@ import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.hook.HTLoginExpansion;
 import org.howtologin.plugin.listener.PlayerListener;
+import org.howtologin.plugin.packet.InventoryPacketListener;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -21,6 +23,7 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
+    private InventoryPacketListener packetListener;
 
     @Override
     public void onEnable() {
@@ -33,6 +36,7 @@ public final class HTLogin extends JavaPlugin {
         registerCommands();
         registerListeners();
         hookPlaceholderAPI();
+        registerPacketListener();
         rePendOnlinePlayers();
 
         getLogger().info(I18n.get("plugin.enabled", getPluginMeta().getVersion()));
@@ -58,7 +62,16 @@ public final class HTLogin extends JavaPlugin {
         // Paper 1.20+ 统一调度器 API，兼容 Folia
         Bukkit.getGlobalRegionScheduler().cancelTasks(this);
         Bukkit.getAsyncScheduler().cancelTasks(this);
+        // 注销 PacketEvents 监听器（不调用 terminate，PE 作为独立插件自行管理生命周期）
+        if (packetListener != null) {
+            var api = PacketEvents.getAPI();
+            if (api != null) {
+                api.getEventManager().unregisterListener(packetListener);
+            }
+        }
+        // 先输出日志再清理 I18n 静态状态，否则 shutdown 后 bundles 被清空会导致 get 返回 key 本身
         getLogger().info(I18n.get("plugin.disabled"));
+        I18n.shutdown();
     }
 
     private void registerCommands() {
@@ -82,6 +95,12 @@ public final class HTLogin extends JavaPlugin {
     private void registerListeners() {
         playerListener = new PlayerListener(this, authManager);
         getServer().getPluginManager().registerEvents(playerListener, this);
+    }
+
+    /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包） */
+    private void registerPacketListener() {
+        packetListener = new InventoryPacketListener(authManager, configManager);
+        PacketEvents.getAPI().getEventManager().registerListener(packetListener);
     }
 
     public ConfigManager getConfigManager() {
