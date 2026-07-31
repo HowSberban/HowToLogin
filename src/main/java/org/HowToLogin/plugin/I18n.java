@@ -7,7 +7,9 @@ import org.bukkit.plugin.Plugin;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
@@ -63,8 +65,9 @@ public final class I18n {
                 if (matcher.matches()) {
                     String locale = matcher.group(1);
                     Properties props = new Properties();
-                    try (InputStreamReader reader = new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)) {
-                        props.load(reader);
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
+                        loadPropertiesWithNewlines(props, reader);
                         bundles.put(locale, props);
                     } catch (IOException e) {
                         plugin.getLogger().warning("无法加载语言文件 " + file.getName() + "：" + e.getMessage());
@@ -75,6 +78,119 @@ public final class I18n {
         if (bundles.isEmpty()) {
             plugin.getLogger().warning("未找到任何语言文件，请检查插件目录");
         }
+    }
+
+    /**
+     * 自定义 properties 加载：支持三引号 {@code """} 包裹的多行值。
+     * 语法：
+     *   - 单行值：key=value（标准 properties，支持反斜杠续行和 \n \t 等转义）
+     *   - 多行值：key=""" 开始，换行书写内容，以单独的 """ 行结束
+     *     多行值内可包含 # = : 等特殊字符，无需转义；物理换行保留为换行符
+     *     仍支持 \n \t 等转义序列（会被解析为对应字符）
+     */
+    private static void loadPropertiesWithNewlines(Properties props, BufferedReader reader) throws IOException {
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line.stripLeading();
+            // 空行或注释跳过
+            if (trimmed.isEmpty() || trimmed.charAt(0) == '#' || trimmed.charAt(0) == '!') continue;
+
+            // 处理续行（行尾奇数个反斜杠）
+            StringBuilder logical = new StringBuilder(trimmed);
+            while (countTrailingBackslashes(logical.toString()) % 2 == 1) {
+                logical.setLength(logical.length() - 1);
+                String next = reader.readLine();
+                if (next == null) break;
+                logical.append(next.stripLeading());
+            }
+            String full = logical.toString();
+
+            // 分割 key 和 value
+            int eq = full.indexOf('=');
+            int colon = full.indexOf(':');
+            int sep = (eq < 0) ? colon : (colon < 0 ? eq : Math.min(eq, colon));
+            if (sep <= 0) continue;
+
+            String key = full.substring(0, sep).trim();
+            String value = full.substring(sep + 1).trim();
+
+            // 三引号多行值
+            if (value.startsWith("\"\"\"")) {
+                String rest = value.substring(3);
+                // 同行结束："""..."""
+                if (rest.endsWith("\"\"\"") && rest.length() >= 3) {
+                    value = rest.substring(0, rest.length() - 3);
+                } else {
+                    // 多行模式：读取直到 """
+                    value = readMultilineValue(reader, rest);
+                }
+            }
+
+            props.setProperty(key, unescape(value));
+        }
+    }
+
+    /** 读取三引号多行值，直到遇到单独的 """ 行或行尾 """ */
+    private static String readMultilineValue(BufferedReader reader, String firstLine) throws IOException {
+        List<String> lines = new ArrayList<>();
+        if (!firstLine.isEmpty()) {
+            lines.add(firstLine);
+        }
+        String nextLine;
+        while ((nextLine = reader.readLine()) != null) {
+            // 整行是 """，结束
+            if (nextLine.equals("\"\"\"")) break;
+            // 行尾是 """，结束（取前面的内容）
+            if (nextLine.endsWith("\"\"\"") && nextLine.length() >= 3) {
+                lines.add(nextLine.substring(0, nextLine.length() - 3));
+                break;
+            }
+            lines.add(nextLine);
+        }
+        return String.join("\n", lines);
+    }
+
+    /** 统计字符串末尾连续反斜杠的数量 */
+    private static int countTrailingBackslashes(String s) {
+        int count = 0;
+        for (int i = s.length() - 1; i >= 0; i--) {
+            if (s.charAt(i) == '\\') count++;
+            else break;
+        }
+        return count;
+    }
+
+    /** properties 标准反转义：换行、制表、回车、反斜杠、Unicode 转义序列 */
+    private static String unescape(String s) {
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 1 < s.length()) {
+                char next = s.charAt(++i);
+                switch (next) {
+                    case 'n' -> sb.append('\n');
+                    case 't' -> sb.append('\t');
+                    case 'r' -> sb.append('\r');
+                    case '\\' -> sb.append('\\');
+                    case 'u' -> {
+                        if (i + 4 < s.length()) {
+                            try {
+                                sb.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                                i += 4;
+                            } catch (NumberFormatException e) {
+                                sb.append('\\').append(next);
+                            }
+                        } else {
+                            sb.append('\\').append(next);
+                        }
+                    }
+                    default -> sb.append('\\').append(next);
+                }
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     /** 重新加载所有语言文件（/htlogin reload 调用） */

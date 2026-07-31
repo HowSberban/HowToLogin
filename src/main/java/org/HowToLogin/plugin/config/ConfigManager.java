@@ -26,6 +26,8 @@ public final class ConfigManager {
     private String mysqlPassword;
     private Map<String, String> mysqlParams;
     private int poolSize;
+    // 数据库配置指纹：用于 reload 时检测数据库配置是否变化（变化需重启而非热重载）
+    private String databaseFingerprint;
 
     // 登录设置
     private int loginTimeout;
@@ -103,7 +105,11 @@ public final class ConfigManager {
                 plugin.saveResource(resource, true);
             }
             I18n.reload();
-            plugin.getLogger().warning(I18n.get("plugin.config_version_mismatch", fileVersion, pluginVersion));
+            if (majorMinorChanged) {
+                plugin.getLogger().warning(I18n.get("plugin.config_version_mismatch", fileVersion, pluginVersion));
+            } else {
+                plugin.getLogger().warning(I18n.get("plugin.lang_version_mismatch", fileVersion, pluginVersion));
+            }
         }
 
         // 从 config.yml 加载各项配置参数
@@ -124,6 +130,9 @@ public final class ConfigManager {
             }
         }
         this.poolSize = config.getInt("database.mysql.pool-size", 10);
+        // 记录数据库配置指纹，用于 reload 时检测是否需要重启
+        this.databaseFingerprint = databaseType + "|" + mysqlHost + "|" + mysqlPort
+                + "|" + mysqlDatabase + "|" + mysqlUsername + "|" + mysqlPassword + "|" + poolSize;
 
         // 登录设置
         this.loginTimeout = config.getInt("login.timeout", 60);
@@ -185,8 +194,17 @@ public final class ConfigManager {
         I18n.setClientLanguageDetection(clientLanguageDetection);
     }
 
-    public void reload() {
+    /**
+     * 重新加载配置。
+     * 数据库配置变化时数据源无法运行时重建，但 ConfigManager 字段仍更新为配置文件当前值，
+     * 重启后 PlayerDataManager 会用新配置创建数据源。
+     * @return true 表示数据库配置发生变化（调用方应提示重启以应用数据库变更）
+     */
+    public boolean reload() {
+        String oldFingerprint = this.databaseFingerprint;
         load();
+        // 字段已更新为配置文件当前值，但运行中的数据源未重建，需提示用户重启
+        return !String.valueOf(oldFingerprint).equals(this.databaseFingerprint);
     }
 
     /** 取版本号前两位（major.minor），patch 版本仅修 bug 不影响配置结构 */

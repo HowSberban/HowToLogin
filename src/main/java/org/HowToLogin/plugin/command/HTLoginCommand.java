@@ -89,10 +89,15 @@ public final class HTLoginCommand {
 
     private int handleReload(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();
-        plugin.getConfigManager().reload();
+        boolean dbChanged = plugin.getConfigManager().reload();
         I18n.reload();
         plugin.getAuthManager().cleanupExpiredStates();
-        sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_success", sender)));
+        if (dbChanged) {
+            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));
+            plugin.getLogger().warning(I18n.get("htlogin.reload_db_changed"));
+        } else {
+            sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_success", sender)));
+        }
         plugin.getLogger().info(I18n.get("plugin.config_reload_log"));
         return Command.SINGLE_SUCCESS;
     }
