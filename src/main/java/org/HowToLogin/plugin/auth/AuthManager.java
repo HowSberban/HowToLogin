@@ -404,6 +404,9 @@ public final class AuthManager {
         invulnerablePending.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
+        // 清理失败计数和踢出记录（玩家已离线，保留无意义）
+        failedAttempts.remove(uuid);
+        kickUntil.remove(uuid);
     }
 
     // Status checks
@@ -611,7 +614,7 @@ public final class AuthManager {
      * 登录/注册成功后的物品状态恢复：
      * 未登录期间数据包监听器清空了该玩家的背包和装备（仅本人视角，他人不受影响）。
      * 登录后调用 updateInventory 让服务器重发真实背包内容（含装备槽）。
-     *
+     * <p>
      * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（updateInventory 非线程安全）。
      */
     public void onLoginSuccess(Player player) {

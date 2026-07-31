@@ -65,9 +65,7 @@ public final class HTLogin extends JavaPlugin {
         // 注销 PacketEvents 监听器（不调用 terminate，PE 作为独立插件自行管理生命周期）
         if (packetListener != null) {
             var api = PacketEvents.getAPI();
-            if (api != null) {
-                api.getEventManager().unregisterListener(packetListener);
-            }
+            api.getEventManager().unregisterListener(packetListener);
         }
         // 先输出日志再清理 I18n 静态状态，否则 shutdown 后 bundles 被清空会导致 get 返回 key 本身
         getLogger().info(I18n.get("plugin.disabled"));
@@ -97,8 +95,12 @@ public final class HTLogin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(playerListener, this);
     }
 
-    /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包） */
+    /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包，需要 PacketEvents 前置） */
     private void registerPacketListener() {
+        if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
+            getLogger().info(I18n.get("log.packetevents_missing"));
+            return;
+        }
         packetListener = new InventoryPacketListener(authManager, configManager);
         PacketEvents.getAPI().getEventManager().registerListener(packetListener);
     }

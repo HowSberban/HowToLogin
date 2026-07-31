@@ -198,11 +198,9 @@ public final class ConfigManager {
         // 背包保护：未登录玩家的背包和末影箱无法被其他玩家查看
         this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", true);
 
-        // 通用设置
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
 
-        // 通用设置：默认语言（控制台日志和客户端语言无匹配文件时使用）
-        // 通用设置
+        // 默认语言（控制台日志和客户端语言无匹配文件时使用）
         String defaultLanguage = config.getString("settings.default-language", "zh_CN");
         boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
         I18n.setDefaultLocale(defaultLanguage);

@@ -92,9 +92,9 @@ protection:
     enabled: false
     # 坐标模式：random（随机）或 fixed（固定坐标）
     mode: random
-    # 随机模式：在世界出生点周围的随机半径（方块数），每次加入位置不同，避免玩家堆积
+    # random：在世界出生点周围的随机半径（方块数），每次加入位置不同，避免玩家堆积
     spawn-radius: 10
-    # mode=fixed 时使用此坐标
+    # fixed: 使用此坐标
     fixed:
       x: 0
       y: 64
@@ -102,6 +102,7 @@ protection:
       yaw: 0
       pitch: 0
   # 背包保护：未登录玩家无法查看自己的背包
+  # 需要前置插件 PacketEvents 才能生效，无此前置时此功能不可用
   inventory:
     enabled: false
 

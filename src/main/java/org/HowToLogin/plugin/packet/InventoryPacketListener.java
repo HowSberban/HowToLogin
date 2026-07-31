@@ -13,6 +13,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.config.ConfigManager;
+import org.jspecify.annotations.NonNull;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,14 +22,14 @@ import java.util.UUID;
 /**
  * 数据包层物品保护：未登录期间，拦截发送给该玩家本人的物品信息数据包，
  * 清空为 EMPTY，防止客户端 Mod（如 MiniHUD）窥视。
- *
+ * <p>
  * 拦截范围：
  * - WINDOW_ITEMS / SET_SLOT（windowId=0/-1/-2）：未登录玩家本人收到时清空
  * - ENTITY_EQUIPMENT：发给未登录玩家本人时清空（目标为自己）
- *
+ * <p>
  * 其他玩家不受影响，始终能看到未登录玩家的真实装备。
  * 登录后由 AuthManager.onLoginSuccess 触发 updateInventory 刷新本人背包（含装备槽）。
- *
+ * <p>
  * 注意：未登录玩家本人的行为限制（不能打开容器/末影箱等）由 prevent.* 配置控制，
  * 不由此监听器负责。此监听器只负责"物品信息不外泄"。
  */
@@ -43,8 +44,9 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
         this.configManager = configManager;
     }
 
+    @SuppressWarnings("IfCanBeSwitch")
     @Override
-    public void onPacketSend(PacketSendEvent event) {
+    public void onPacketSend(@NonNull PacketSendEvent event) {
         if (!configManager.protectionInventoryEnabled()) return;
 
         UUID receiverId = event.getUser().getUUID();
@@ -68,7 +70,7 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
         if (authManager.isLoggedIn(receiverId)) return;
 
         List<ItemStack> original = wrapper.getItems();
-        if (original == null || original.isEmpty()) return;
+        if (original.isEmpty()) return;
 
         List<ItemStack> empty = new ArrayList<>(original.size());
         for (int i = 0; i < original.size(); i++) {
@@ -104,14 +106,14 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
         WrapperPlayServerEntityEquipment wrapper = new WrapperPlayServerEntityEquipment(event);
         int entityId = wrapper.getEntityId();
 
-        Player target = lookupPlayerByEntityId(entityId);
-        if (target == null) return;
-        // 仅拦截发给未登录玩家本人的装备包（防止客户端 Mod 读取自身装备）
-        if (!target.getUniqueId().equals(receiverId)) return;
+        // 获取接收者玩家，检查数据包目标是否为自己（无需遍历全服玩家）
+        Player receiver = Bukkit.getPlayer(receiverId);
+        if (receiver == null) return;
+        if (receiver.getEntityId() != entityId) return;
         if (authManager.isLoggedIn(receiverId)) return;
 
         List<Equipment> original = wrapper.getEquipment();
-        if (original == null || original.isEmpty()) return;
+        if (original.isEmpty()) return;
 
         List<Equipment> empty = new ArrayList<>(original.size());
         for (Equipment eq : original) {
@@ -119,13 +121,5 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
         }
         wrapper.setEquipment(empty);
         event.markForReEncode(true);
-    }
-
-    /** 通过 entityId 查找在线 Player，未找到返回 null */
-    private static Player lookupPlayerByEntityId(int entityId) {
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (player.getEntityId() == entityId) return player;
-        }
-        return null;
     }
 }

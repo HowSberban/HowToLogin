@@ -8,7 +8,6 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -167,7 +166,7 @@ public final class I18n {
             }
             lines.add(nextLine);
         }
-        return new String[]{String.join("\n", lines), closed ? "true" : "false"};
+        return new String[]{String.join("\n", lines), Boolean.toString(closed)};
     }
 
     /** 统计字符串末尾连续反斜杠的数量 */
