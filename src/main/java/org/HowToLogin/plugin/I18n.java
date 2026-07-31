@@ -118,7 +118,7 @@ public final class I18n {
             if (value.startsWith("\"\"\"")) {
                 String rest = value.substring(3);
                 // 同行结束："""..."""
-                if (rest.endsWith("\"\"\"") && rest.length() >= 3) {
+                if (rest.endsWith("\"\"\"")) {
                     value = rest.substring(0, rest.length() - 3);
                 } else {
                     // 多行模式：读取直到 """
@@ -141,7 +141,7 @@ public final class I18n {
             // 整行是 """，结束
             if (nextLine.equals("\"\"\"")) break;
             // 行尾是 """，结束（取前面的内容）
-            if (nextLine.endsWith("\"\"\"") && nextLine.length() >= 3) {
+            if (nextLine.endsWith("\"\"\"")) {
                 lines.add(nextLine.substring(0, nextLine.length() - 3));
                 break;
             }
