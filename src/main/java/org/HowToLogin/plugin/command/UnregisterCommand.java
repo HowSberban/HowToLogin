@@ -13,6 +13,7 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.Locale;
 import java.util.UUID;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
@@ -42,13 +43,17 @@ public final class UnregisterCommand {
                 .build();
     }
 
-    /** 补全已进过服的玩家名 */
+    /** 补全已进过服的玩家名（按输入前缀过滤，匹配的优先） */
     private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_OFFLINE_PLAYERS =
             (context, builder) -> {
+                String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
                 for (OfflinePlayer op : Bukkit.getOfflinePlayers()) {
                     String name = op.getName();
                     if (name != null) {
-                        builder.suggest(name);
+                        // 未输入或名称匹配前缀时才建议，避免无关名称干扰
+                        if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                            builder.suggest(name);
+                        }
                     }
                 }
                 return builder.buildFuture();
