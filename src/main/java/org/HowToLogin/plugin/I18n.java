@@ -45,11 +45,7 @@ public final class I18n {
         for (String resource : BUNDLED_RESOURCES) {
             File file = new File(plugin.getDataFolder(), resource);
             if (!file.exists()) {
-                try {
-                    plugin.saveResource(resource, false);
-                } catch (IllegalArgumentException e) {
-                    plugin.getLogger().warning("Failed to extract resource " + resource + " from jar: " + e.getMessage());
-                }
+                plugin.saveResource(resource, false);
             }
         }
         loadAll();
