@@ -16,6 +16,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
+import java.util.UUID;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
 import static io.papermc.paper.command.brigadier.Commands.literal;
@@ -45,17 +46,17 @@ public final class HTLoginCommand {
                 // /htlogin accounts <player>
                 .then(literal("accounts")
                         .then(argument("player", StringArgumentType.word())
-                                .suggests(SUGGEST_PLAYERS)
+                                .suggests(SUGGEST_ALL_PLAYERS)
                                 .executes(this::handleAccounts)))
                 // /htlogin forcelogout <player>
                 .then(literal("forcelogout")
                         .then(argument("player", StringArgumentType.word())
-                                .suggests(SUGGEST_PLAYERS)
+                                .suggests(SUGGEST_ALL_PLAYERS)
                                 .executes(this::handleForceLogout)))
                 // /htlogin forcechangepw <player> <newpassword>
                 .then(literal("forcechangepw")
                         .then(argument("player", StringArgumentType.word())
-                                .suggests(SUGGEST_PLAYERS)
+                                .suggests(SUGGEST_ALL_PLAYERS)
                                 .then(argument("newpassword", StringArgumentType.word())
                                         .executes(this::handleForceChangePw))))
                 // /htlogin forcelogin <player>
@@ -77,6 +78,25 @@ public final class HTLoginCommand {
             (context, builder) -> {
                 for (Player player : Bukkit.getOnlinePlayers()) {
                     builder.suggest(player.getName());
+                }
+                return builder.buildFuture();
+            };
+
+    /** 所有已注册玩家补全（包括离线玩家），用于支持离线操作的子命令 */
+    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_ALL_PLAYERS =
+            (context, builder) -> {
+                // 先添加在线玩家
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    builder.suggest(player.getName());
+                }
+                // 再添加已注册的离线玩家
+                for (UUID uuid : plugin.getPlayerDataManager().getAllUuids()) {
+                    if (Bukkit.getPlayer(uuid) != null) continue; // 已在线，跳过
+                    OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                    String name = offline.getName();
+                    if (name != null) {
+                        builder.suggest(name);
+                    }
                 }
                 return builder.buildFuture();
             };

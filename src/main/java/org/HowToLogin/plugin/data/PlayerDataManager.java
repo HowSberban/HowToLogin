@@ -171,6 +171,11 @@ public final class PlayerDataManager {
         ps.setString(5, data.logoutLocation());
     }
 
+    /** 获取所有已注册玩家的 UUID 集合 */
+    public java.util.Set<UUID> getAllUuids() {
+        return players.keySet();
+    }
+
     public boolean hasAccount(UUID uuid) {
         return players.containsKey(uuid);
     }
