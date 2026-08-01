@@ -48,7 +48,7 @@ public final class I18n {
                 try {
                     plugin.saveResource(resource, false);
                 } catch (IllegalArgumentException e) {
-                    plugin.getLogger().warning("无法从 jar 内释放 " + resource + "：" + e.getMessage());
+                    plugin.getLogger().warning("Failed to extract resource " + resource + " from jar: " + e.getMessage());
                 }
             }
         }
@@ -74,7 +74,7 @@ public final class I18n {
                         loadPropertiesWithNewlines(props, reader);
                         newBundles.put(locale, props);
                     } catch (IOException e) {
-                        plugin.getLogger().warning("无法加载语言文件 " + file.getName() + "：" + e.getMessage());
+                        plugin.getLogger().warning("Failed to load language file " + file.getName() + ": " + e.getMessage());
                     }
                 }
             }
@@ -83,7 +83,7 @@ public final class I18n {
         bundles.clear();
         bundles.putAll(newBundles);
         if (bundles.isEmpty()) {
-            plugin.getLogger().warning("未找到任何语言文件，请检查插件目录");
+            plugin.getLogger().warning("No language files found. Please check the plugin directory.");
         }
     }
 
@@ -132,7 +132,7 @@ public final class I18n {
                     String[] result = readMultilineValue(reader, rest);
                     value = result[0];
                     if ("false".equals(result[1])) {
-                        plugin.getLogger().warning("语言文件中 key \"" + key + "\" 的三引号值未闭合");
+                        plugin.getLogger().warning("Unclosed triple-quote in language file for key \"" + key + "\"");
                     }
                 }
             }

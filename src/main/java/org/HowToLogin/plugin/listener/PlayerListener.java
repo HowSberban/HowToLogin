@@ -257,7 +257,8 @@ public final class PlayerListener implements Listener {
         // 提取命令名（去掉前导 / 和参数），统一小写匹配
         String message = event.getMessage();
         if (message.startsWith("/")) message = message.substring(1);
-        String commandName = message.split(" ", 2)[0].toLowerCase(Locale.ROOT);
+        int space = message.indexOf(' ');
+        String commandName = (space > 0 ? message.substring(0, space) : message).toLowerCase(Locale.ROOT);
 
         // 白名单内的命令允许执行
         if (plugin.getConfigManager().commandWhitelist().contains(commandName)) {
@@ -357,13 +358,14 @@ public final class PlayerListener implements Listener {
         // 过滤补全结果：只保留白名单命令
         List<String> whitelist = plugin.getConfigManager().commandWhitelist();
         List<String> filtered = event.getCompletions().stream()
-                .filter(c -> {
-                    // 补全结果可能带前导 "/"，统一去掉再匹配
-                    String name = c.startsWith("/") ? c.substring(1) : c;
-                    name = name.split(" ", 2)[0].toLowerCase(Locale.ROOT);
-                    return whitelist.contains(name);
-                })
-                .toList();
+                        .filter(c -> {
+                            // 补全结果可能带前导 "/"，统一去掉再匹配
+                            String name = c.startsWith("/") ? c.substring(1) : c;
+                            int space = name.indexOf(' ');
+                            name = (space > 0 ? name.substring(0, space) : name).toLowerCase(Locale.ROOT);
+                            return whitelist.contains(name);
+                        })
+                        .toList();
         event.setCompletions(filtered);
     }
 

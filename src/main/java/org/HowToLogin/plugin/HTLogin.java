@@ -13,6 +13,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.lang.reflect.Method;
 import java.util.List;
 
 public final class HTLogin extends JavaPlugin {
@@ -92,12 +93,27 @@ public final class HTLogin extends JavaPlugin {
     private void registerPacketListener() {
         if (!configManager.protectionInventoryEnabled()) return;
         if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            getLogger().info(I18n.get("log.packetevents_missing"));
+            getLogger().warning(I18n.get("log.packetevents_missing"));
             return;
         }
-        // 使用全限定类名避免顶层 import 导致 Paper 类加载器在无 PacketEvents 时解析失败
-        var listener = new org.howtologin.plugin.packet.InventoryPacketListener(authManager, configManager);
-        com.github.retrooper.packetevents.PacketEvents.getAPI().getEventManager().registerListener(listener);
+        try {
+            // 反射加载，避免无 PacketEvents 时 Paper 类加载器解析常量池失败
+            Class<?> listenerClass = Class.forName("org.howtologin.plugin.packet.InventoryPacketListener");
+            Object listener = listenerClass.getConstructor(AuthManager.class, ConfigManager.class)
+                    .newInstance(authManager, configManager);
+
+            Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
+            Object api = peClass.getMethod("getAPI").invoke(null);
+            Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
+            for (Method m : eventManager.getClass().getMethods()) {
+                if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
+                    m.invoke(eventManager, listener);
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            getLogger().warning(I18n.get("log.packet_listener_failed", e.getMessage()));
+        }
     }
 
     public ConfigManager getConfigManager() {
@@ -120,7 +136,7 @@ public final class HTLogin extends JavaPlugin {
     private void hookPlaceholderAPI() {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
             new HTLoginExpansion(this).register();
-            getLogger().info("PlaceholderAPI 集成已启用");
+            getLogger().info(I18n.get("log.placeholderapi_enabled"));
         }
     }
 

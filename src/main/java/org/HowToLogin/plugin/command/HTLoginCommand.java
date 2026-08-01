@@ -5,7 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.mojang.brigadier.tree.LiteralCommandNode;
-import net.kyori.adventure.text.Component;
+
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
@@ -92,6 +92,11 @@ public final class HTLoginCommand {
         boolean dbChanged = plugin.getConfigManager().reload();
         I18n.reload();
         plugin.getAuthManager().cleanupExpiredStates();
+        // 背包保护开启但无 PacketEvents 时提醒
+        if (plugin.getConfigManager().protectionInventoryEnabled()
+                && org.bukkit.Bukkit.getPluginManager().getPlugin("packetevents") == null) {
+            plugin.getLogger().warning(I18n.get("log.packetevents_missing"));
+        }
         if (dbChanged) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));
             plugin.getLogger().warning(I18n.get("htlogin.reload_db_changed"));
@@ -134,7 +139,7 @@ public final class HTLoginCommand {
 
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_result", sender, targetName, ip, otherNames.size())));
             for (String name : otherNames) {
-                sender.sendMessage(Component.text(" - " + name));
+                sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_item", sender, name)));
             }
         });
         return Command.SINGLE_SUCCESS;

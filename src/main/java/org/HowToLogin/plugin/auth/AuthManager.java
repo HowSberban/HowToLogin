@@ -290,7 +290,7 @@ public final class AuthManager {
                 pendingDatDelete.add(uuid);
             } else {
                 // 玩家离线：无文件锁，直接删除
-                deletePlayerDataWithRetry(uuid, 0);
+                deletePlayerDataWithRetry(uuid);
             }
         }
         return true;
@@ -323,24 +323,26 @@ public final class AuthManager {
      */
     public void tryDeletePlayerDataOnQuit(UUID uuid) {
         if (!pendingDatDelete.remove(uuid)) return;
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid, 0));
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid));
     }
 
     /** 重试删除玩家数据，5 秒内持续尝试（首次 500ms，后续每 300ms） */
-    private void deletePlayerDataWithRetry(UUID uuid, long elapsed) {
-        try {
-            Thread.sleep(elapsed == 0 ? 500 : 300);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
+    private void deletePlayerDataWithRetry(UUID uuid) {
+        long elapsed = 0;
+        while (true) {
+            try {
+                Thread.sleep(elapsed == 0 ? 500 : 300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            elapsed += elapsed == 0 ? 500 : 300;
+            if (deletePlayerData(uuid)) return;
+            if (elapsed >= 5000) {
+                plugin.getLogger().warning(I18n.get("log.delete_player_data_failed", uuid));
+                return;
+            }
         }
-        long newElapsed = elapsed + (elapsed == 0 ? 500 : 300);
-        if (deletePlayerData(uuid)) return;
-        if (newElapsed >= 5000) {
-            plugin.getLogger().warning(I18n.get("log.delete_player_data_failed", uuid));
-            return;
-        }
-        deletePlayerDataWithRetry(uuid, newElapsed);
     }
 
     /**
