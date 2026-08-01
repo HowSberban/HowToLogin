@@ -327,6 +327,7 @@ public final class AuthManager {
     }
 
     /** 重试删除玩家数据，5 秒内持续尝试（首次 500ms，后续每 300ms） */
+    @SuppressWarnings("BusyWait")
     private void deletePlayerDataWithRetry(UUID uuid) {
         long elapsed = 0;
         while (true) {
