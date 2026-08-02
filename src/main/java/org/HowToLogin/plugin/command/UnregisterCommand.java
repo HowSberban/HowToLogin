@@ -13,6 +13,7 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.Locale;
 import java.util.UUID;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
@@ -26,10 +27,31 @@ public final class UnregisterCommand {
 
     private final HTLogin plugin;
     private final AuthManager authManager;
+    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_OFFLINE_PLAYERS;
 
     public UnregisterCommand(HTLogin plugin, AuthManager authManager) {
         this.plugin = plugin;
         this.authManager = authManager;
+        this.SUGGEST_OFFLINE_PLAYERS = (context, builder) -> {
+            String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+            // 先添加在线玩家
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                String name = player.getName();
+                if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                    builder.suggest(name);
+                }
+            }
+            // 再添加已注册的离线玩家
+            for (UUID uuid : this.plugin.getPlayerDataManager().getAllUuids()) {
+                if (Bukkit.getPlayer(uuid) != null) continue;
+                OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                String name = offline.getName();
+                if (name != null && (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining))) {
+                    builder.suggest(name);
+                }
+            }
+            return builder.buildFuture();
+        };
     }
 
     /** 构建命令树节点（由 HTLogin 注册时调用） */
@@ -41,25 +63,6 @@ public final class UnregisterCommand {
                         .executes(this::execute))
                 .build();
     }
-
-    /** 补全所有已注册玩家（包括离线玩家），与 htlogin 命令的补全逻辑一致 */
-    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_OFFLINE_PLAYERS =
-            (context, builder) -> {
-                // 先添加在线玩家
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    builder.suggest(player.getName());
-                }
-                // 再添加已注册的离线玩家
-                for (UUID uuid : plugin.getPlayerDataManager().getAllUuids()) {
-                    if (Bukkit.getPlayer(uuid) != null) continue;
-                    OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
-                    String name = offline.getName();
-                    if (name != null) {
-                        builder.suggest(name);
-                    }
-                }
-                return builder.buildFuture();
-            };
 
     private int execute(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();

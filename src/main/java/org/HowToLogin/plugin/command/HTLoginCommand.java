@@ -16,6 +16,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
@@ -29,9 +30,30 @@ import static io.papermc.paper.command.brigadier.Commands.literal;
 public final class HTLoginCommand {
 
     private final HTLogin plugin;
+    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_ALL_PLAYERS;
 
     public HTLoginCommand(HTLogin plugin) {
         this.plugin = plugin;
+        this.SUGGEST_ALL_PLAYERS = (context, builder) -> {
+            String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+            // 先添加在线玩家
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                String name = player.getName();
+                if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                    builder.suggest(name);
+                }
+            }
+            // 再添加已注册的离线玩家
+            for (UUID uuid : this.plugin.getPlayerDataManager().getAllUuids()) {
+                if (Bukkit.getPlayer(uuid) != null) continue;
+                OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+                String name = offline.getName();
+                if (name != null && (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining))) {
+                    builder.suggest(name);
+                }
+            }
+            return builder.buildFuture();
+        };
     }
 
     /** 构建命令树节点（由 HTLogin 注册时调用） */
@@ -76,25 +98,10 @@ public final class HTLoginCommand {
     /** 在线玩家名补全 */
     private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_PLAYERS =
             (context, builder) -> {
+                String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
                 for (Player player : Bukkit.getOnlinePlayers()) {
-                    builder.suggest(player.getName());
-                }
-                return builder.buildFuture();
-            };
-
-    /** 所有已注册玩家补全（包括离线玩家），用于支持离线操作的子命令 */
-    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_ALL_PLAYERS =
-            (context, builder) -> {
-                // 先添加在线玩家
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    builder.suggest(player.getName());
-                }
-                // 再添加已注册的离线玩家
-                for (UUID uuid : plugin.getPlayerDataManager().getAllUuids()) {
-                    if (Bukkit.getPlayer(uuid) != null) continue; // 已在线，跳过
-                    OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
-                    String name = offline.getName();
-                    if (name != null) {
+                    String name = player.getName();
+                    if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
                         builder.suggest(name);
                     }
                 }
