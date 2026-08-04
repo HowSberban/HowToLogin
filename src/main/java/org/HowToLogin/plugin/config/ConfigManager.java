@@ -71,6 +71,11 @@ public final class ConfigManager {
     // 通用设置
     private boolean realUnreg;
 
+    // 正版验证
+    private boolean premiumEnabled;
+    private int premiumTimeoutSeconds;
+    private int premiumCrackerCacheSeconds;
+
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
         load();
@@ -200,6 +205,11 @@ public final class ConfigManager {
 
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
 
+        // 正版验证
+        this.premiumEnabled = config.getBoolean("premium.enabled", false);
+        this.premiumTimeoutSeconds = config.getInt("premium.timeout-seconds", 10);
+        this.premiumCrackerCacheSeconds = config.getInt("premium.cracker-cache-seconds", 120);
+
         // 默认语言（控制台日志和客户端语言无匹配文件时使用）
         String defaultLanguage = config.getString("settings.default-language", "zh_CN");
         boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
@@ -281,5 +291,10 @@ public final class ConfigManager {
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }
+
+    // 正版验证
+    public boolean premiumEnabled() { return premiumEnabled; }
+    public int premiumTimeoutSeconds() { return premiumTimeoutSeconds; }
+    public int premiumCrackerCacheSeconds() { return premiumCrackerCacheSeconds; }
 
 }

@@ -74,6 +74,19 @@ public final class PlayerListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
+        // 正版玩家免密登录：跳过密码验证，直接标记为已登录
+        if (authManager.isPremium(player)) {
+            // 先检查 IP 是否一致（决定是否需要传送）
+            // IP 一致时 onSpawnLocation 已将出生点设为退出位置，无需传送
+            // IP 不一致时需传送到退出位置
+            boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
+            authManager.loginByPremium(player);
+            if (!ipAutoLogin) {
+                authManager.returnToLogoutLocation(player);
+            }
+            return;
+        }
+
         if (authManager.hasAccount(player)) {
             // 尝试 IP 免密登录：上次登录 IP 与当前一致时自动登录
             if (authManager.checkIpAutoLogin(player)) {

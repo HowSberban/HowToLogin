@@ -9,6 +9,8 @@ import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.hook.HTLoginExpansion;
 import org.howtologin.plugin.listener.PlayerListener;
+import org.howtologin.plugin.premium.DataService;
+import org.howtologin.plugin.premium.MojangClient;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -35,6 +37,7 @@ public final class HTLogin extends JavaPlugin {
         registerListeners();
         hookPlaceholderAPI();
         registerPacketListener();
+        registerPremiumListener();
         rePendOnlinePlayers();
 
         getLogger().info(I18n.get("plugin.enabled", getPluginMeta().getVersion()));
@@ -113,6 +116,46 @@ public final class HTLogin extends JavaPlugin {
             }
         } catch (Exception e) {
             getLogger().warning(I18n.get("log.packet_listener_failed", e.getMessage()));
+        }
+    }
+
+    /**
+     * 注册正版验证监听器（需要 PacketEvents 前置）。
+     * DataService 和 MojangClient 不依赖 PacketEvents，可直接加载；
+     * PlayerInjector 和 ConnectionHandler 依赖 PacketEvents，通过反射加载。
+     */
+    private void registerPremiumListener() {
+        if (!configManager.premiumEnabled()) return;
+        if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
+            getLogger().warning(I18n.get("log.packetevents_missing"));
+            return;
+        }
+        try {
+            // DataService / MojangClient 无 PacketEvents 依赖，直接实例化
+            DataService dataService = new DataService(playerDataManager, configManager.premiumCrackerCacheSeconds());
+            MojangClient mojangClient = new MojangClient(configManager.premiumTimeoutSeconds());
+
+            // PlayerInjector / ConnectionHandler 依赖 PacketEvents，反射加载
+            Class<?> injectorClass = Class.forName("org.howtologin.plugin.premium.PlayerInjector");
+            Object playerInjector = injectorClass.getConstructor(HTLogin.class).newInstance(this);
+
+            Class<?> handlerClass = Class.forName("org.howtologin.plugin.premium.ConnectionHandler");
+            Object handler = handlerClass
+                    .getConstructor(HTLogin.class, DataService.class, MojangClient.class, injectorClass)
+                    .newInstance(this, dataService, mojangClient, playerInjector);
+
+            // 通过反射注册到 PacketEvents
+            Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
+            Object api = peClass.getMethod("getAPI").invoke(null);
+            Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
+            for (Method m : eventManager.getClass().getMethods()) {
+                if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
+                    m.invoke(eventManager, handler);
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            getLogger().warning(I18n.get("log.premium_listener_failed", e.getMessage()));
         }
     }
 

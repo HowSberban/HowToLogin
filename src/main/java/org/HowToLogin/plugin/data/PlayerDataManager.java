@@ -32,10 +32,13 @@ public final class PlayerDataManager {
 
     // REPLACE INTO 在 SQLite 与 MySQL 均支持：主键存在则先 DELETE 再 INSERT，否则直接 INSERT
     private static final String SQL_UPSERT =
-            "REPLACE INTO players (uuid, password_hash, ip, last_login, logout_location) VALUES (?, ?, ?, ?, ?)";
+            "REPLACE INTO players (uuid, name, password_hash, ip, last_login, logout_location, premium, properties) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     private static final String SQL_DELETE = "DELETE FROM players WHERE uuid = ?";
     private static final String SQL_UPDATE_PASSWORD =
             "UPDATE players SET password_hash = ? WHERE uuid = ?";
+    private static final String SQL_UPDATE_PREMIUM =
+            "UPDATE players SET premium = ?, properties = ?, name = ? WHERE uuid = ?";
 
     public PlayerDataManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -82,21 +85,39 @@ public final class PlayerDataManager {
         return new HikariDataSource(config);
     }
 
-    /** 建表（如果不存在） */
+    /** 建表（如果不存在）+ 迁移新列 */
     private void initTable() {
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate(
                     "CREATE TABLE IF NOT EXISTS players (" +
                     "  uuid VARCHAR(36) PRIMARY KEY," +
+                    "  name VARCHAR(16)," +
                     "  password_hash VARCHAR(255) NOT NULL," +
                     "  ip VARCHAR(45) NOT NULL DEFAULT ''," +
                     "  last_login BIGINT NOT NULL DEFAULT 0," +
-                    "  logout_location TEXT" +
+                    "  logout_location TEXT," +
+                    "  premium BOOLEAN NOT NULL DEFAULT 0," +
+                    "  properties TEXT" +
                     ")"
             );
+            // 迁移：为旧表添加新列（ALTER TABLE ADD COLUMN 在列已存在时抛异常，忽略即可）
+            addColumnIfMissing(stmt, conn, "players", "name", "VARCHAR(16)");
+            addColumnIfMissing(stmt, conn, "players", "premium", "BOOLEAN NOT NULL DEFAULT 0");
+            addColumnIfMissing(stmt, conn, "players", "properties", "TEXT");
         } catch (SQLException e) {
             plugin.getLogger().severe(I18n.get("log.init_table_failed", e.getMessage()));
+        }
+    }
+
+    /** 安全添加列：若列不存在则执行 ALTER TABLE ADD COLUMN */
+    private void addColumnIfMissing(Statement stmt, Connection conn, String table, String column, String type) {
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, table, column)) {
+            if (!rs.next()) {
+                stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
+            }
+        } catch (SQLException ignored) {
+            // 列已存在或其他异常，忽略
         }
     }
 
@@ -106,15 +127,18 @@ public final class PlayerDataManager {
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(
-                     "SELECT uuid, password_hash, ip, last_login, logout_location FROM players")) {
+                     "SELECT uuid, name, password_hash, ip, last_login, logout_location, premium, properties FROM players")) {
             while (rs.next()) {
                 UUID uuid = UUID.fromString(rs.getString("uuid"));
                 PlayerData data = new PlayerData(
                         uuid,
+                        rs.getString("name"),
                         rs.getString("password_hash"),
                         rs.getString("ip"),
                         rs.getLong("last_login"),
-                        rs.getString("logout_location")
+                        rs.getString("logout_location"),
+                        rs.getBoolean("premium"),
+                        rs.getString("properties")
                 );
                 players.put(uuid, data);
             }
@@ -167,10 +191,13 @@ public final class PlayerDataManager {
 
     private static void bindPlayerData(PreparedStatement ps, PlayerData data) throws SQLException {
         ps.setString(1, data.uuid().toString());
-        ps.setString(2, data.passwordHash());
-        ps.setString(3, data.ip());
-        ps.setLong(4, data.lastLogin());
-        ps.setString(5, data.logoutLocation());
+        ps.setString(2, data.name());
+        ps.setString(3, data.passwordHash());
+        ps.setString(4, data.ip());
+        ps.setLong(5, data.lastLogin());
+        ps.setString(6, data.logoutLocation());
+        ps.setBoolean(7, data.premium());
+        ps.setString(8, data.properties());
     }
 
     /** 获取所有已注册玩家的 UUID 集合 */
@@ -195,9 +222,62 @@ public final class PlayerDataManager {
     }
 
     public void createPlayer(UUID uuid, String passwordHash, String ip) {
-        PlayerData data = new PlayerData(uuid, passwordHash, ip, System.currentTimeMillis() / 1000, null);
+        PlayerData data = new PlayerData(uuid, null, passwordHash, ip, System.currentTimeMillis() / 1000, null, false, null);
         players.put(uuid, data);
         save(uuid);
+    }
+
+    /** 创建正版玩家记录（premium=1，无密码，带 properties 皮肤数据） */
+    public void createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
+        PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties);
+        players.put(uuid, data);
+        save(uuid);
+    }
+
+    /** 标记已有账号为正版（premium=1），更新 properties 和 name */
+    public void markPremium(UUID uuid, String name, String properties) {
+        PlayerData data = players.get(uuid);
+        if (data == null) return;
+        data.premium(true);
+        data.properties(properties);
+        data.name(name);
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_PREMIUM)) {
+                ps.setBoolean(1, true);
+                ps.setString(2, properties);
+                ps.setString(3, name);
+                ps.setString(4, uuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe(I18n.get("log.save_player_failed", uuid, e.getMessage()));
+            }
+        });
+    }
+
+    /** 更新玩家名（登录时同步最新名称） */
+    public void updateName(UUID uuid, String name) {
+        PlayerData data = players.get(uuid);
+        if (data == null) return;
+        data.name(name);
+        save(uuid);
+    }
+
+    /** 按玩家名查询（用于正版验证 LoginStart 阶段，仅返回 premium=1 的记录） */
+    public PlayerData getByName(String name) {
+        if (name == null) return null;
+        for (PlayerData data : players.values()) {
+            if (name.equalsIgnoreCase(data.name()) && data.premium()) {
+                return data;
+            }
+        }
+        return null;
+    }
+
+    /** 是否为正版账号（premium=1） */
+    public boolean isPremium(UUID uuid) {
+        PlayerData data = players.get(uuid);
+        return data != null && data.premium();
     }
 
     public void removePlayer(UUID uuid) {
@@ -271,21 +351,33 @@ public final class PlayerDataManager {
     public static final class PlayerData {
         private final UUID uuid;
         // volatile 保证可见性：主线程写入后，异步保存线程能读到最新值
+        private volatile String name;
         private volatile String passwordHash;
         private volatile String ip;
         private volatile long lastLogin;
         // 玩家上次已登录退出时的位置（序列化字符串），用于登录后传送回原位置
         private volatile String logoutLocation;
+        // 正版标记：true=正版账号（免密），false=离线账号（密码登录）
+        private volatile boolean premium;
+        // 正版玩家皮肤 properties（JSON 字符串，来自 Mojang hasJoined 响应）
+        private volatile String properties;
 
-        public PlayerData(UUID uuid, String passwordHash, String ip, long lastLogin, String logoutLocation) {
+        public PlayerData(UUID uuid, String name, String passwordHash, String ip, long lastLogin,
+                          String logoutLocation, boolean premium, String properties) {
             this.uuid = uuid;
+            this.name = name;
             this.passwordHash = passwordHash;
             this.ip = ip;
             this.lastLogin = lastLogin;
             this.logoutLocation = logoutLocation;
+            this.premium = premium;
+            this.properties = properties;
         }
 
         public UUID uuid() { return uuid; }
+        public String name() { return name; }
+        public void name(String name) { this.name = name; }
+
         public String passwordHash() { return passwordHash; }
         public void passwordHash(String hash) { this.passwordHash = hash; }
 
@@ -297,5 +389,11 @@ public final class PlayerDataManager {
 
         public String logoutLocation() { return logoutLocation; }
         public void logoutLocation(String logoutLocation) { this.logoutLocation = logoutLocation; }
+
+        public boolean premium() { return premium; }
+        public void premium(boolean premium) { this.premium = premium; }
+
+        public String properties() { return properties; }
+        public void properties(String properties) { this.properties = properties; }
     }
 }

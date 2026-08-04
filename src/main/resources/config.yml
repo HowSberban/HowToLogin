@@ -116,3 +116,15 @@ settings:
   # 注销账号时是否删除 Minecraft 原版玩家数据（player.dat）
   # 包含背包、装备、血量、经验、位置、末影箱等
   real-unreg: true
+
+# 正版验证（需要前置插件 PacketEvents）
+# 在 online-mode=false 的服务端上，通过 PacketEvents 拦截登录流程，
+# 让正版客户端完成 Mojang 加密验证，获取真实正版 UUID 并实现免密进服
+premium:
+  # 是否启用正版验证（总开关）
+  enabled: false
+  # hasJoined HTTP 超时（秒），超时视为 Mojang 服务不可用
+  timeout-seconds: 10
+  # 离线客户端首次失败后的重连缓存有效期（秒）
+  # 检测到离线客户端后标记 IP+名，有效期内重连直接走离线登录
+  cracker-cache-seconds: 120

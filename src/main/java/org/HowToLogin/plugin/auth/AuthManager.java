@@ -553,6 +553,36 @@ public final class AuthManager {
         return invulnerablePending.contains(player.getUniqueId());
     }
 
+    /** 是否为正版账号（premium=1），用于免密登录判断 */
+    public boolean isPremium(Player player) {
+        return isPremium(player.getUniqueId());
+    }
+
+    public boolean isPremium(UUID uuid) {
+        return dataManager.isPremium(uuid);
+    }
+
+    /**
+     * 正版玩家免密登录：更新登录时间和 IP，标记为已登录。
+     * 与 loginByIp 类似但不检查 IP 一致性（正版玩家始终免密）。
+     */
+    public void loginByPremium(Player player) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data != null) {
+            data.lastLogin(System.currentTimeMillis() / 1000);
+            if (player.getAddress() != null) {
+                data.ip(player.getAddress().getAddress().getHostAddress());
+            }
+            dataManager.save(uuid);
+        }
+        loggedIn.add(uuid);
+        pendingLogin.remove(uuid);
+        failedAttempts.remove(uuid);
+        kickUntil.remove(uuid);
+        onLoginSuccess(player);
+    }
+
     /**
      * 在主世界出生点周围寻找能立足的随机位置（老玩家专用）。
      * 安全标准放宽：只需"下方固体方块"（能站立）。
