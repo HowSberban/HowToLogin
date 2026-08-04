@@ -59,6 +59,7 @@ public final class PlayerListener implements Listener {
 
         // 同一 IP 账号数量限制：仅对新玩家（无账号）检查
         // 统计已注册账号 + 在线未注册玩家，防止多人同时进服后注册超限
+        // 为什么不在注册时检查？那样不会踢出玩家，不符合直觉（个人体验）
         int maxAccounts = plugin.getConfigManager().maxAccountsPerIp();
         if (maxAccounts > 0 && !authManager.hasAccount(uuid)) {
             String ip = event.getAddress().getHostAddress();
