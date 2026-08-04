@@ -281,10 +281,10 @@ public final class AuthManager {
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
-        // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
-        recentUnregister.put(uuid, System.currentTimeMillis());
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
+            // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
+            recentUnregister.put(uuid, System.currentTimeMillis());
             if (Bukkit.getPlayer(uuid) != null) {
                 // 玩家在线：标记后由 PlayerQuitEvent 删除（避免文件锁冲突）
                 pendingDatDelete.add(uuid);
@@ -292,6 +292,8 @@ public final class AuthManager {
                 // 玩家离线：无文件锁，直接删除
                 deletePlayerDataWithRetry(uuid);
             }
+            // 顺手清理已过期的踢出记录、失败计数和注销拒绝重连记录，防止批量注销时累积
+            cleanupExpiredStates();
         }
         return true;
     }
@@ -469,7 +471,7 @@ public final class AuthManager {
         return remaining > 0 ? remaining / 1000 : 0;
     }
 
-    /** 清理已过期的踢出记录、失败计数和注销拒绝重连记录（reload 时调用，防止内存泄漏） */
+    /** 清理已过期的踢出记录、失败计数和注销拒绝重连记录（由周期任务每分钟调用，reload 时也会调用） */
     public void cleanupExpiredStates() {
         long now = System.currentTimeMillis();
         kickUntil.entrySet().removeIf(entry -> entry.getValue() <= now);

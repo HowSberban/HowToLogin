@@ -32,7 +32,8 @@ public final class I18n {
     // 解析文件名中的 locale 后缀：zh_CN.properties -> zh_CN
     private static final Pattern LOCALE_PATTERN = Pattern.compile("^(.+)\\.properties$");
 
-    private static final Map<String, Properties> bundles = new ConcurrentHashMap<>();
+    // volatile 保证可见性：loadAll 整体替换引用，读线程要么看到旧 map 要么看到新 map
+    private static volatile Map<String, Properties> bundles = new ConcurrentHashMap<>();
     private static String defaultLocale = "zh_CN";
     private static boolean clientLanguageDetection = true;
     private static Plugin plugin;
@@ -75,10 +76,9 @@ public final class I18n {
                 }
             }
         }
-        // 原子替换：clear + putAll，ConcurrentHashMap 保证读线程不会看到中间状态
-        bundles.clear();
-        bundles.putAll(newBundles);
-        if (bundles.isEmpty()) {
+        // 整体替换引用：volatile 保证可见性，读线程要么看到旧 map 要么看到新 map，不会读到中间状态
+        bundles = newBundles;
+        if (newBundles.isEmpty()) {
             plugin.getLogger().warning("No language files found. Please check the plugin directory.");
         }
     }
@@ -215,7 +215,7 @@ public final class I18n {
 
     /** 清理静态状态（onDisable 调用，避免热卸载时类加载器无法回收） */
     public static void shutdown() {
-        bundles.clear();
+        bundles = new ConcurrentHashMap<>();
         plugin = null;
         defaultLocale = "zh_CN";
         clientLanguageDetection = true;

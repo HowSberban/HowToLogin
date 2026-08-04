@@ -9,6 +9,8 @@ import org.bukkit.Location;
 import org.bukkit.World;
 
 import java.io.File;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -58,7 +60,7 @@ public final class PlayerDataManager {
                     .append(cm.mysqlDatabase());
             if (!cm.mysqlParams().isEmpty()) {
                 String query = cm.mysqlParams().entrySet().stream()
-                        .map(e -> e.getKey() + "=" + e.getValue())
+                        .map(e -> e.getKey() + "=" + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
                         .collect(Collectors.joining("&"));
                 url.append("?").append(query);
             }

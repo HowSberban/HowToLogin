@@ -30,6 +30,18 @@ import static io.papermc.paper.command.brigadier.Commands.literal;
 public final class HTLoginCommand {
 
     private final HTLogin plugin;
+    /** 在线玩家名补全（不依赖实例状态，static） */
+    private static final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_PLAYERS =
+            (context, builder) -> {
+                String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    String name = player.getName();
+                    if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
+                        builder.suggest(name);
+                    }
+                }
+                return builder.buildFuture();
+            };
     private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_ALL_PLAYERS;
 
     public HTLoginCommand(HTLogin plugin) {
@@ -94,19 +106,6 @@ public final class HTLoginCommand {
                                         .executes(this::handleForceRegister))))
                 .build();
     }
-
-    /** 在线玩家名补全 */
-    private final SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> SUGGEST_PLAYERS =
-            (context, builder) -> {
-                String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    String name = player.getName();
-                    if (remaining.isEmpty() || name.toLowerCase(Locale.ROOT).startsWith(remaining)) {
-                        builder.suggest(name);
-                    }
-                }
-                return builder.buildFuture();
-            };
 
     private int showUsage(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
         CommandSender sender = ctx.getSource().getSender();

@@ -20,9 +20,7 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.InventoryHolder;
-import org.bukkit.event.server.TabCompleteEvent;
 
-import java.util.List;
 import java.util.Locale;
 
 // AsyncPlayerSpawnLocationEvent 等 Paper API 标记为 @ApiStatus.Experimental，实际已稳定可用
@@ -340,34 +338,6 @@ public final class PlayerListener implements Listener {
     }
 
     // ===== 以下为新增事件监听 =====
-
-    // 未登录玩家只能补全白名单命令，防止通过 Tab 遍历服务器所有命令
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onTabComplete(TabCompleteEvent event) {
-        if (!plugin.getConfigManager().preventCommand()) return;
-        if (!(event.getSender() instanceof Player player)) return;
-        if (authManager.isLoggedIn(player)) return;
-
-        String buffer = event.getBuffer();
-        if (!buffer.startsWith("/")) return;
-
-        // 只过滤顶层命令名补全（buffer 无空格时）
-        // 一旦进入命令参数补全（buffer 含空格），不再过滤，交给各命令自身的 suggest 逻辑
-        if (buffer.indexOf(' ') != -1) return;
-
-        // 过滤补全结果：只保留白名单命令
-        List<String> whitelist = plugin.getConfigManager().commandWhitelist();
-        List<String> filtered = event.getCompletions().stream()
-                        .filter(c -> {
-                            // 补全结果可能带前导 "/"，统一去掉再匹配
-                            String name = c.startsWith("/") ? c.substring(1) : c;
-                            int space = name.indexOf(' ');
-                            name = (space > 0 ? name.substring(0, space) : name).toLowerCase(Locale.ROOT);
-                            return whitelist.contains(name);
-                        })
-                        .toList();
-        event.setCompletions(filtered);
-    }
 
     // 背包保护：阻止查看未登录玩家的背包或末影箱
     // InventoryHolder 为 Player 时表示打开的是某玩家的背包或末影箱
