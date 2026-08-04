@@ -349,11 +349,11 @@ public final class AuthManager {
     }
 
     /**
-     * 删除 Minecraft 原版玩家数据文件（player.dat 及其备份）。
+     * 删除 Minecraft 原版玩家数据（player.dat、advancements、stats）。
      * 目录结构兼容（通过服务端版本判断，构造时缓存）：
-     *   - 旧版（< 26.1）：world/playerdata（worldDir 即世界根目录）
-     *   - 26.1+：world/players/data（worldDir 是维度目录 world/dimensions/minecraft/overworld，
-     *     玩家数据在其上级 3 层的世界根目录下）
+     *   - 旧版（< 26.1）：world/playerdata、world/advancements、world/stats
+     *   - 26.1+：world/players/data、world/players/advancements、world/players/stats
+     *     （worldDir 是维度目录 world/dimensions/minecraft/overworld，玩家数据在其上级 3 层的世界根目录下）
      * 由 tryDeletePlayerDataOnQuit 异步重试调用（服务器保存 .dat 后再删除）。
      * @return true 表示文件已删除或不存在（成功）；false 表示文件仍存在（需重试）
      */
@@ -361,43 +361,48 @@ public final class AuthManager {
         World world = Bukkit.getWorlds().getFirst();
         File worldDir = world.getWorldFolder();
 
-        File playerDataDir;
+        File worldRoot;
         if (newWorldStructure) {
             // 26.1+：worldDir 是维度目录，向上 3 层到世界根目录
-            File worldRoot = worldDir.getParentFile(); // minecraft
+            worldRoot = worldDir.getParentFile(); // minecraft
             if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // dimensions
             if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // world 根
-            playerDataDir = worldRoot != null ? resolvePlayerDataDir(worldRoot) : null;
         } else {
             // 旧版：worldDir 即世界根目录
-            playerDataDir = resolvePlayerDataDir(worldDir);
+            worldRoot = worldDir;
         }
 
-        if (playerDataDir == null) {
+        if (worldRoot == null) {
             plugin.getLogger().warning(I18n.get("log.player_data_dir_not_found", worldDir.getAbsolutePath()));
             return true; // 目录不存在视为无需删除，停止重试
         }
-        File datFile = new File(playerDataDir, uuid + ".dat");
-        File datOldFile = new File(playerDataDir, uuid + ".dat_old");
-        // 删除 .dat_old（备份文件，删除失败不影响）
+
+        // 26.1+ 子目录在 players/ 下，旧版在根目录下（playerdata 名称也不同）
+        String dataDir = newWorldStructure ? "players/data" : "playerdata";
+        String advDir = newWorldStructure ? "players/advancements" : "advancements";
+        String statsDir = newWorldStructure ? "players/stats" : "stats";
+
+        // 删除 .dat_old（备份文件，失败仅告警，不影响重试）
+        File datOldFile = new File(worldRoot, dataDir + "/" + uuid + ".dat_old");
         if (datOldFile.exists() && !datOldFile.delete()) {
             plugin.getLogger().warning(I18n.get("log.delete_player_data_backup_failed", datOldFile.getAbsolutePath()));
         }
-        // 删除 .dat（主文件，删除结果决定是否重试）
-        if (!datFile.exists()) return true; // 文件已不存在，视为删除成功
-        // delete() 返回 true 表示删除成功；false 表示文件被锁（服务器仍在保存），返回 false 触发重试
-        return datFile.delete();
+
+        // 删除 .dat、advancements/.json、stats/.json，任一失败则重试
+        return deletePlayerFile(new File(worldRoot, dataDir), uuid, ".dat")
+                && deletePlayerFile(new File(worldRoot, advDir), uuid, ".json")
+                && deletePlayerFile(new File(worldRoot, statsDir), uuid, ".json");
     }
 
     /**
-     * 检查目录下是否存在玩家数据目录（优先 26.1+ 的 players/data，其次旧版 playerdata）。
-     * 不存在返回 null。
+     * 删除指定目录下的玩家文件（<uuid>.<ext>）。
+     * @return true 表示文件已删除或目录/文件不存在；false 表示文件仍存在（需重试）
      */
-    private File resolvePlayerDataDir(File dir) {
-        File newDir = new File(dir, "players/data");
-        if (newDir.isDirectory()) return newDir;
-        File oldDir = new File(dir, "playerdata");
-        return oldDir.isDirectory() ? oldDir : null;
+    private boolean deletePlayerFile(File dir, UUID uuid, String ext) {
+        if (!dir.isDirectory()) return true;
+        File file = new File(dir, uuid + ext);
+        if (!file.exists()) return true;
+        return file.delete();
     }
 
     // 玩家退出时调用 — 清理会话状态
