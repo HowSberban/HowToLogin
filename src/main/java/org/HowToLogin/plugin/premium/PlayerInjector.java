@@ -90,7 +90,9 @@ public final class PlayerInjector {
         }
 
         // 2. 从 Connection 获取 packetListener（ServerLoginPacketListenerImpl）
-        Object loginListener = getFieldValue(connection, "packetListener");
+        Field packetListenerField = findField(connection.getClass(), "packetListener");
+        packetListenerField.setAccessible(true);
+        Object loginListener = packetListenerField.get(connection);
         if (loginListener == null) {
             throw new IllegalStateException("Packet listener is null");
         }
@@ -156,14 +158,7 @@ public final class PlayerInjector {
         field.set(obj, value);
     }
 
-    /** 反射读取 private 字段（递归查找父类） */
-    private static Object getFieldValue(Object obj, String fieldName) throws Exception {
-        Field field = findField(obj.getClass(), fieldName);
-        field.setAccessible(true);
-        return field.get(obj);
-    }
-
-    /** 递归查找字段（含父类） */
+    // 递归查找字段（含父类）
     private static Field findField(Class<?> clazz, String fieldName) throws NoSuchFieldException {
         while (clazz != null) {
             try {

@@ -86,6 +86,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     // ===== 阶段1：LoginStart 拦截与查档 =====
 
+    @SuppressWarnings("resource") // EventLoop 为长生命周期资源，不应关闭；调度任务在会话清理时取消
     private void handleLoginStart(PacketReceiveEvent event) {
         Channel channel = (Channel) event.getChannel();
         User user = event.getUser();
@@ -163,15 +164,16 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         // 6. 调度超时清理：预防恶意客户端收到 EncryptionRequest 后既不回传也不断开，
         // 导致会话永久滞留 sessions Map 造成内存泄漏（断开检测器只在 channelInactive 时触发）
         // 仅当当前会话仍为本会话且处于等待阶段时才清理，避免误伤同一 channel 上的新会话
+        // 将 ScheduledFuture 存入会话，供清理/断开时取消，避免任务在会话结束后仍触发
         final SessionContext created = session;
-        channel.eventLoop().schedule(() -> {
+        created.timeoutTask(channel.eventLoop().schedule(() -> {
             SessionContext current = sessions.get(channel);
             if (current == created
                     && current.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE) {
                 cleanupSession(channel);
                 channel.close();
             }
-        }, 30_000L, TimeUnit.MILLISECONDS);
+        }, 30_000L, TimeUnit.MILLISECONDS));
     }
 
     // ===== 阶段2-3：加密握手与启用 =====
@@ -337,7 +339,10 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     /** 清理会话和检测器 */
     private void cleanupSession(Channel channel) {
-        sessions.remove(channel);
+        SessionContext session = sessions.remove(channel);
+        if (session != null && session.timeoutTask() != null) {
+            session.timeoutTask().cancel(false); // 取消超时任务，避免会话结束后无意义触发
+        }
         removeDetector(channel);
     }
 

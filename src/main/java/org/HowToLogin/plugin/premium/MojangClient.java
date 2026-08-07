@@ -79,6 +79,7 @@ public final class MojangClient {
                     + URLEncoder.encode(username, StandardCharsets.UTF_8)
                     + "&serverId=" + serverHash;
 
+            // 首次尝试 + 最多 MAX_RETRIES 次重试；重试耗尽（限流/超时持续）时由循环条件退出
             for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
                 try {
                     HttpRequest request = HttpRequest.newBuilder(URI.create(url))
@@ -103,49 +104,37 @@ public final class MojangClient {
                         return Optional.of(new PremiumProfile(uuid, properties));
                     }
 
-                    // 204 No Content：可能是客户端未 join 或 Mojang 限流
-                    // 限流时频繁重试会加重限流，使用指数退避（5s, 10s）
-                    if (code == 204) {
-                        if (attempt < MAX_RETRIES) {
-                            plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
-                                    username, attempt + 1, MAX_RETRIES));
-                            sleep(backoffDelay(attempt));
-                            continue;
-                        }
+                    // 非可重试状态码：直接失败
+                    if (code != 204 && !isRetryable(code)) {
                         plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                                username, "HTTP 204"));
+                                username, "HTTP " + code));
                         return Optional.empty();
                     }
 
-                    // 可重试状态码：429（限流）/ 503（临时不可用）/ 502 / 504
-                    if (isRetryable(code) && attempt < MAX_RETRIES) {
+                    // 可重试状态码（204 未 join/限流，429/502/503/504 限流或临时不可用）：
+                    // 若还有剩余尝试次数则指数退避后重试，否则不 sleep，由循环条件终止
+                    // 频繁重试会加重限流，故退避间隔较长（5s, 10s）
+                    if (attempt < MAX_RETRIES) {
                         plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
                                 username, attempt + 1, MAX_RETRIES));
                         sleep(backoffDelay(attempt));
-                        continue;
                     }
-
-                    // 其他状态码：不重试，直接失败
-                    plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                            username, "HTTP " + code));
-                    return Optional.empty();
                 } catch (java.net.http.HttpTimeoutException e) {
                     // 请求/连接超时均抛 HttpTimeoutException（含其子类 HttpConnectTimeoutException）
                     if (attempt < MAX_RETRIES) {
                         plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
                                 username, attempt + 1, MAX_RETRIES));
                         sleep(backoffDelay(attempt));
-                        continue;
                     }
-                    plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                            username, "timeout"));
-                    return Optional.empty();
                 } catch (Exception e) {
                     plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
                             username, e.getClass().getSimpleName() + ": " + e.getMessage()));
                     return Optional.empty();
                 }
             }
+            // 重试耗尽：所有尝试均限流或超时
+            plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
+                    username, "max retries"));
             return Optional.empty();
         }, HTTP_EXECUTOR);
     }

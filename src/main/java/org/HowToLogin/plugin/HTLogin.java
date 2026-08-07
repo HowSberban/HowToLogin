@@ -11,6 +11,7 @@ import org.howtologin.plugin.hook.HTLoginExpansion;
 import org.howtologin.plugin.listener.PlayerListener;
 import org.howtologin.plugin.premium.DataService;
 import org.howtologin.plugin.premium.MojangClient;
+import org.howtologin.plugin.premium.PlayerInjector;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -138,12 +139,11 @@ public final class HTLogin extends JavaPlugin {
             DataService dataService = new DataService(playerDataManager, configManager);
             MojangClient mojangClient = new MojangClient(this);
 
-            Class<?> injectorClass = Class.forName("org.howtologin.plugin.premium.PlayerInjector");
-            Object playerInjector = injectorClass.getConstructor(HTLogin.class).newInstance(this);
+            PlayerInjector playerInjector = new PlayerInjector(this);
 
             Class<?> handlerClass = Class.forName("org.howtologin.plugin.premium.ConnectionHandler");
             Object handler = handlerClass
-                    .getConstructor(HTLogin.class, DataService.class, MojangClient.class, injectorClass)
+                    .getConstructor(HTLogin.class, DataService.class, MojangClient.class, PlayerInjector.class)
                     .newInstance(this, dataService, mojangClient, playerInjector);
 
             registerPacketEventsListener(handler);

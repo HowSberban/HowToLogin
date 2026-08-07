@@ -1,5 +1,6 @@
 package org.howtologin.plugin.premium;
 
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -32,6 +33,12 @@ public final class SessionContext {
     private volatile String ip;
     // 一次性验证令牌（RSA 加密后发送给客户端）
     private volatile byte[] verifyToken;
+
+    // 超时清理任务（EventLoop 调度），会话被清理或断开时取消，避免任务在会话结束后触发
+    private volatile ScheduledFuture<?> timeoutTask;
+
+    public ScheduledFuture<?> timeoutTask() { return timeoutTask; }
+    public void timeoutTask(ScheduledFuture<?> timeoutTask) { this.timeoutTask = timeoutTask; }
 
     public Stage stage() {
         return stage.get();
