@@ -9,6 +9,7 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 import io.netty.handler.codec.MessageToByteEncoder;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import java.util.List;
 
@@ -47,10 +48,13 @@ public final class CryptoHandler {
      */
     public static void enableEncryption(Channel channel, byte[] sharedSecret) throws Exception {
         SecretKeySpec keySpec = new SecretKeySpec(sharedSecret, "AES");
+        // Minecraft 原版约定：共享密钥同时用作 key 和 IV（与 Connection.setupEncryption 一致）
+        // Java 17+ 不再为 CFB8 自动生成 IV，必须显式指定，否则抛 "Parameters missing"
+        IvParameterSpec ivSpec = new IvParameterSpec(sharedSecret);
         Cipher encryptCipher = Cipher.getInstance("AES/CFB8/NoPadding");
-        encryptCipher.init(Cipher.ENCRYPT_MODE, keySpec);
+        encryptCipher.init(Cipher.ENCRYPT_MODE, keySpec, ivSpec);
         Cipher decryptCipher = Cipher.getInstance("AES/CFB8/NoPadding");
-        decryptCipher.init(Cipher.DECRYPT_MODE, keySpec);
+        decryptCipher.init(Cipher.DECRYPT_MODE, keySpec, ivSpec);
 
         ChannelPipeline pipeline = channel.pipeline();
 
@@ -69,7 +73,7 @@ public final class CryptoHandler {
 
         // 安装加密处理器：在帧编码器之前加密输出字节流
         // outbound 流向为 tail→head，addBefore 使加密器位于 prepender 之前（即更靠近 head），
-        // 实际执行顺序：encoder → encrypt → prepender → wire，整帧（含长度前缀）被加密
+        // 实际执行顺序：encoder → prepender → encrypt → wire，整帧（含长度前缀）被加密
         if (pipeline.get(PREPENDER) != null) {
             pipeline.addBefore(PREPENDER, ENCRYPT_NAME, new EncryptHandler(encryptCipher));
         } else {

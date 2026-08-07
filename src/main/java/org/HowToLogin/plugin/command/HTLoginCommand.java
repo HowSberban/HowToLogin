@@ -118,10 +118,16 @@ public final class HTLoginCommand {
         boolean dbChanged = plugin.getConfigManager().reload();
         I18n.reload();
         plugin.getAuthManager().cleanupExpiredStates();
-        // 背包保护开启但无 PacketEvents 时提醒
-        if (plugin.getConfigManager().protectionInventoryEnabled()
-                && org.bukkit.Bukkit.getPluginManager().getPlugin("packetevents") == null) {
+        // 启用背包保护或正版验证但缺少 PacketEvents 前置时提醒
+        if (org.bukkit.Bukkit.getPluginManager().getPlugin("packetevents") == null
+                && (plugin.getConfigManager().preventInventory()
+                || plugin.getConfigManager().premiumEnabled())) {
             plugin.getLogger().warning(I18n.get("log.packetevents_missing"));
+        }
+        // 缺少 PacketEvents 且数据库存在正版玩家：无法验证，已注册正版玩家将掉线丢账号 → Error 级红色告警
+        if (org.bukkit.Bukkit.getPluginManager().getPlugin("packetevents") == null
+                && plugin.getPlayerDataManager().hasPremiumPlayers()) {
+            plugin.getLogger().severe(I18n.get("log.premium_account_at_risk"));
         }
         if (dbChanged) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));

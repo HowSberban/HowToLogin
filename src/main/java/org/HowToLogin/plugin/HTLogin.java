@@ -94,26 +94,21 @@ public final class HTLogin extends JavaPlugin {
 
     /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包，需要 PacketEvents 前置） */
     private void registerPacketListener() {
-        if (!configManager.protectionInventoryEnabled()) return;
         if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            getLogger().warning(I18n.get("log.packetevents_missing"));
+            if (configManager.preventInventory()) {
+                getLogger().warning(I18n.get("log.packetevents_missing"));
+            }
             return;
         }
+        // 始终注册监听器，是否拦截由 InventoryPacketListener 按 prevent.inventory 实时判断，
+        // 使配置热重载（/htlogin reload）能即时开关背包保护而不必重启
+        // 反射加载：InventoryPacketListener 继承 PacketEvents 类，
+        // 若直接 import 会在插件加载阶段触发 PacketEvents 类解析失败
         try {
-            // 反射加载，避免无 PacketEvents 时 Paper 类加载器解析常量池失败
             Class<?> listenerClass = Class.forName("org.howtologin.plugin.packet.InventoryPacketListener");
             Object listener = listenerClass.getConstructor(AuthManager.class, ConfigManager.class)
                     .newInstance(authManager, configManager);
-
-            Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
-            Object api = peClass.getMethod("getAPI").invoke(null);
-            Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
-            for (Method m : eventManager.getClass().getMethods()) {
-                if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
-                    m.invoke(eventManager, listener);
-                    break;
-                }
-            }
+            registerPacketEventsListener(listener);
         } catch (Exception e) {
             getLogger().warning(I18n.get("log.packet_listener_failed", e.getMessage()));
         }
@@ -121,21 +116,28 @@ public final class HTLogin extends JavaPlugin {
 
     /**
      * 注册正版验证监听器（需要 PacketEvents 前置）。
-     * DataService 和 MojangClient 不依赖 PacketEvents，可直接加载；
-     * PlayerInjector 和 ConnectionHandler 依赖 PacketEvents，通过反射加载。
+     * DataService/MojangClient 不依赖 PacketEvents，可直接实例化；
+     * PlayerInjector/ConnectionHandler 依赖 PacketEvents，反射加载。
+     * 始终注册监听器；是否拦截正版玩家由 ConnectionHandler 按数据库 premium 标记实时判断
+     * （premium=1 始终验证，配置文件 premium.enabled 只决定新玩家是否验证），
+     * 使配置热重载（/htlogin reload）能即时开关正版验证而不必重启。
      */
     private void registerPremiumListener() {
-        if (!configManager.premiumEnabled()) return;
         if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            getLogger().warning(I18n.get("log.packetevents_missing"));
+            if (configManager.premiumEnabled()) {
+                getLogger().warning(I18n.get("log.packetevents_missing"));
+            }
+            // 缺少 PacketEvents 且数据库存在正版玩家：无法运行正版验证，
+            // 已注册正版玩家将掉线并从离线模式重建账号 → Error 级红色告警
+            if (playerDataManager.hasPremiumPlayers()) {
+                getLogger().severe(I18n.get("log.premium_account_at_risk"));
+            }
             return;
         }
         try {
-            // DataService / MojangClient 无 PacketEvents 依赖，直接实例化
-            DataService dataService = new DataService(playerDataManager, configManager.premiumCrackerCacheSeconds());
-            MojangClient mojangClient = new MojangClient(configManager.premiumTimeoutSeconds());
+            DataService dataService = new DataService(playerDataManager, configManager);
+            MojangClient mojangClient = new MojangClient(this);
 
-            // PlayerInjector / ConnectionHandler 依赖 PacketEvents，反射加载
             Class<?> injectorClass = Class.forName("org.howtologin.plugin.premium.PlayerInjector");
             Object playerInjector = injectorClass.getConstructor(HTLogin.class).newInstance(this);
 
@@ -144,18 +146,22 @@ public final class HTLogin extends JavaPlugin {
                     .getConstructor(HTLogin.class, DataService.class, MojangClient.class, injectorClass)
                     .newInstance(this, dataService, mojangClient, playerInjector);
 
-            // 通过反射注册到 PacketEvents
-            Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
-            Object api = peClass.getMethod("getAPI").invoke(null);
-            Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
-            for (Method m : eventManager.getClass().getMethods()) {
-                if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
-                    m.invoke(eventManager, handler);
-                    break;
-                }
-            }
+            registerPacketEventsListener(handler);
         } catch (Exception e) {
             getLogger().warning(I18n.get("log.premium_listener_failed", e.getMessage()));
+        }
+    }
+
+    /** 反射注册监听器到 PacketEvents（避免 HTLogin 常量池引用 PacketEvents 类） */
+    private void registerPacketEventsListener(Object listener) throws Exception {
+        Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
+        Object api = peClass.getMethod("getAPI").invoke(null);
+        Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
+        for (Method m : eventManager.getClass().getMethods()) {
+            if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
+                m.invoke(eventManager, listener);
+                return;
+            }
         }
     }
 

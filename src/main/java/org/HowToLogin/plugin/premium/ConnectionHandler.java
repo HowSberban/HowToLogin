@@ -17,7 +17,6 @@ import org.howtologin.plugin.I18n;
 
 import javax.crypto.Cipher;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
@@ -26,6 +25,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 连接处理器（模块1）—— 调度 + 加密握手合并。
@@ -33,10 +33,15 @@ import java.util.concurrent.ConcurrentHashMap;
  * 监听 LoginStart / EncryptionResponse 包事件，为每个连接维护会话状态机，
  * 编排 DataService / MojangClient / PlayerInjector 完成正版验证流程。
  * <p>
+ * 方案：取消 LoginStart，自行发送 EncryptionRequest，验证完成后设置
+ * authenticatedProfile + state=VERIFYING，让服务端 tick() 自然接管
+ * （触发 PlayerLoginEvent → 发送 LoginSuccess → state=PROTOCOL_SWITCHING）。
+ * AsyncPlayerPreLoginEvent 由插件手动触发（handleHello 被取消，服务端不会触发）。
+ * <p>
  * 线程模型：
  * - onPacketReceive 运行在 PacketEvents IO/事件线程
  * - Mojang HTTP 在异步线程执行
- * - 状态推进和 LoginSuccess 发送切回 IO 线程（channel.eventLoop）
+ * - 状态推进切回 IO 线程（channel.eventLoop）
  * <p>
  * 仅拦截需要正版验证的连接（premium=1 或新玩家），离线玩家（premium=0 或离线确认命中）
  * 不取消 LoginStart，由服务端原生处理。
@@ -55,6 +60,9 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     // Netty pipeline 中断开检测器名称
     private static final String DETECTOR_NAME = "htlogin_disconnect_detector";
+
+    // 验证令牌随机数生成器（线程安全，复用避免重复初始化开销）
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public ConnectionHandler(HTLogin plugin, DataService dataService, MojangClient mojangClient,
                              PlayerInjector playerInjector) {
@@ -87,14 +95,12 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
         // 获取玩家 IP
         String ip = extractIp(channel);
-        if (ip == null) return; // 无法获取 IP，放行让服务端处理
-
-        // 1. 检查离线确认标记：命中则不拦截，让服务端原生处理
-        if (dataService.isOfflineConfirmed(ip, username)) {
-            return;
+        if (ip == null) {
+            return; // 无法获取 IP，放行让服务端处理
         }
 
-        // 2. 查询档案（纯内存操作）
+        // 1. 以数据库标记为准判断是否拦截（premium=0/1），与 premium.enabled 配置开关无关：
+        //    premium=1 玩家始终走正版验证，防止管理员关掉正版验证后已注册正版玩家掉线丢账号
         DataService.ProfileResult profile = dataService.getProfile(username);
 
         // 存在且 premium=0 → 离线玩家，不拦截
@@ -102,7 +108,17 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             return;
         }
 
-        // 3. premium=1 或新玩家 → 取消包，走正版验证流程
+        // 2. 新玩家（不在数据库）：仅当正版验证开启时才拦截验证，否则按离线处理
+        //    同时检查离线确认标记，避免离线客户端反复尝试正版验证
+        //    已注册玩家（含 premium=1）不受离线标记影响，防止同名离线玩家抢占正版账号
+        if (!profile.exists()) {
+            if (!plugin.getConfigManager().premiumEnabled()) return;
+            if (dataService.isOfflineConfirmed(ip, username)) return;
+        }
+
+        plugin.getLogger().info(I18n.get("log.premium_verifying", username, ip));
+
+        // 3. premium=1 或新玩家 → 取消 LoginStart，走正版验证流程
         event.setCancelled(true);
 
         // 清理旧会话（同一 channel 不应有多条 LoginStart，但防御性处理）
@@ -112,12 +128,11 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         SessionContext session = new SessionContext();
         session.username(username);
         session.ip(ip);
-        session.publicKey(publicKeyEncoded);
         sessions.put(channel, session);
 
         // 4. 生成验证令牌并发送 EncryptionRequest
         byte[] verifyToken = new byte[4];
-        new SecureRandom().nextBytes(verifyToken);
+        SECURE_RANDOM.nextBytes(verifyToken);
         session.verifyToken(verifyToken);
 
         WrapperLoginServerEncryptionRequest request =
@@ -125,12 +140,17 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         user.sendPacket(request);
 
         // 5. 注册断开检测器：若在收到 EncryptionResponse 之前断开，确认为离线客户端
+        // 仅对新玩家标记离线：已注册玩家（含 premium=1）由数据库决定身份，无需离线标记
+        // 防御性移除同名旧处理器
+        final boolean isNewPlayer = !profile.exists();
+        try { channel.pipeline().remove(DETECTOR_NAME); } catch (Exception ignored) {}
         channel.pipeline().addFirst(DETECTOR_NAME, new ChannelInboundHandlerAdapter() {
             @Override
-            public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+            public void channelInactive(ChannelHandlerContext ctx) {
                 SessionContext s = sessions.get(channel);
-                if (s != null && s.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE) {
-                    // 发送 EncryptionRequest 后未收到响应即断开 → 离线客户端
+                if (s != null && s.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE
+                        && isNewPlayer) {
+                    // 新玩家在收到 EncryptionResponse 前断开 → 离线客户端
                     dataService.markOfflineConfirmed(s.ip(), s.username());
                 }
                 sessions.remove(channel);
@@ -139,10 +159,24 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         });
 
         session.advance(SessionContext.Stage.START, SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE);
+
+        // 6. 调度超时清理：预防恶意客户端收到 EncryptionRequest 后既不回传也不断开，
+        // 导致会话永久滞留 sessions Map 造成内存泄漏（断开检测器只在 channelInactive 时触发）
+        // 仅当当前会话仍为本会话且处于等待阶段时才清理，避免误伤同一 channel 上的新会话
+        final SessionContext created = session;
+        channel.eventLoop().schedule(() -> {
+            SessionContext current = sessions.get(channel);
+            if (current == created
+                    && current.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE) {
+                cleanupSession(channel);
+                channel.close();
+            }
+        }, 30_000L, TimeUnit.MILLISECONDS);
     }
 
     // ===== 阶段2-3：加密握手与启用 =====
 
+    @SuppressWarnings("resource")
     private void handleEncryptionResponse(PacketReceiveEvent event) {
         Channel channel = (Channel) event.getChannel();
         User user = event.getUser();
@@ -153,7 +187,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         // 阶段不匹配 → 放行
         if (session.stage() != SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE) return;
 
-        // 取消包：阻止服务端处理（服务端在 online-mode=false 时不会收到此包，但防御性取消）
+        // 取消包：阻止服务端处理（服务端 state=HELLO，不取消会因状态不匹配抛异常）
         event.setCancelled(true);
 
         try {
@@ -183,7 +217,6 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
             // 9. 启用 AES-CFB8 双向加密
             CryptoHandler.enableEncryption(channel, sharedSecret);
-            session.sharedSecret(sharedSecret);
             session.advance(SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE, SessionContext.Stage.ENCRYPTED);
 
             // 10. 移除断开检测器（已收到响应，确认为正版客户端）
@@ -194,24 +227,26 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             String username = session.username();
 
             mojangClient.hasJoined(serverHash, username).thenAccept(premiumProfile -> {
-                if (premiumProfile.isEmpty()) {
-                    // 验证失败：经加密通道发送 Disconnect
-                    channel.eventLoop().execute(() -> {
-                        sendDisconnect(user, I18n.get("listener.premium_unavailable"));
-                        cleanupSession(channel);
-                    });
-                    return;
-                }
+                try {
+                    if (premiumProfile.isEmpty()) {
+                        // 验证失败：经加密通道发送 Disconnect
+                        channel.eventLoop().execute(() -> {
+                            if (channel.isActive()) {
+                                sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                            }
+                            cleanupSession(channel);
+                        });
+                        return;
+                    }
 
-                UUID uuid = premiumProfile.get().uuid();
-                String properties = premiumProfile.get().propertiesJson();
+                    UUID uuid = premiumProfile.get().uuid();
+                    String properties = premiumProfile.get().propertiesJson();
 
-                // 13. 保存正版数据（异步落盘）
-                dataService.savePremium(uuid, username, session.ip(), properties);
+                    // 12. 保存正版数据（异步落盘）
+                    dataService.savePremium(uuid, username, session.ip(), properties);
 
-                // 17. 异步触发 AsyncPlayerPreLoginEvent
-                playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> {
-                    channel.eventLoop().execute(() -> {
+                    // 13. 异步触发 AsyncPlayerPreLoginEvent
+                    playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> channel.eventLoop().execute(() -> {
                         if (!channel.isActive()) {
                             cleanupSession(channel);
                             return;
@@ -222,18 +257,32 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                             cleanupSession(channel);
                             return;
                         }
-                        // 18-19. 推进状态机 + 发送 LoginSuccess
+                        // 14. 设置 authenticatedProfile + state=VERIFYING
+                        // 服务端 tick() 会自然调用 verifyLoginAndFinishConnectionSetup：
+                        //   → canPlayerLogin（触发 PlayerLoginEvent）→ state=WAITING_FOR_DUPE_DISCONNECT
+                        //   → finishLoginAndWaitForClient → 发送 LoginSuccess（含正版 UUID + 皮肤）
+                        //   → state=PROTOCOL_SWITCHING
+                        // 客户端收到 LoginSuccess 后发送 LoginAcknowledged，服务端自然接手协议切换
                         try {
-                            playerInjector.advanceState(channel, uuid, username, properties);
-                            playerInjector.sendLoginSuccess(user, uuid, username, properties);
+                            playerInjector.setProfileAndAdvanceState(channel, uuid, username, properties);
                             session.advance(SessionContext.Stage.ENCRYPTED, SessionContext.Stage.DONE);
                         } catch (Exception e) {
-                            plugin.getLogger().severe(I18n.get("log.premium_state_advance_failed", e.getMessage()));
+                            plugin.getLogger().severe(I18n.get("log.premium_state_advance_failed", e.toString()));
                             sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                        } finally {
                             cleanupSession(channel);
                         }
+                    }));
+                } catch (Exception e) {
+                    // 异步链兜底：savePremium 等同步操作异常时也要清理会话，避免泄漏
+                    plugin.getLogger().severe(I18n.get("log.premium_async_failed", e.getMessage()));
+                    channel.eventLoop().execute(() -> {
+                        if (channel.isActive()) {
+                            sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                        }
+                        cleanupSession(channel);
                     });
-                });
+                }
             });
         } catch (Exception e) {
             plugin.getLogger().severe(I18n.get("log.premium_cipher_init_failed", e.getMessage()));
@@ -253,17 +302,18 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     }
 
     /**
-     * 计算 Mojang 服务器哈希：正十六进制( SHA-1( "" + sharedSecret + publicKey ) )
-     * BigInteger(1, digest) 保证无前导零的正数表示。
+     * 计算 Mojang 服务器哈希：十六进制( SHA-1( serverId("") + sharedSecret + publicKey ) )
+     * 使用 new BigInteger(digest)（不带 signum=1），与 vanilla Minecraft 一致：
+     * 若 digest 首字节 >= 0x80，结果为负数（如 "-abc123..."），客户端也用相同方式计算。
      */
     private static String computeServerHash(byte[] sharedSecret, byte[] publicKey) {
         try {
             MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
-            sha1.update("".getBytes(StandardCharsets.UTF_8));
+            // serverId 为空字符串，update 空数组是 no-op，直接跳过
             sha1.update(sharedSecret);
             sha1.update(publicKey);
             byte[] digest = sha1.digest();
-            return new java.math.BigInteger(1, digest).toString(16);
+            return new java.math.BigInteger(digest).toString(16);
         } catch (Exception e) {
             throw new RuntimeException("Failed to compute server hash", e);
         }
@@ -273,7 +323,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     private void sendDisconnect(User user, String message) {
         WrapperLoginServerDisconnect disconnect = new WrapperLoginServerDisconnect(
                 HTLogin.legacy(message));
-        user.writePacket(disconnect);
+        user.sendPacket(disconnect);
     }
 
     /** 移除 pipeline 中的断开检测器 */

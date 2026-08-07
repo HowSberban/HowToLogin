@@ -29,6 +29,8 @@ public final class PlayerDataManager {
     private final HikariDataSource dataSource;
     // 内存缓存：启动时全量加载，运行时读操作走缓存，写操作异步落库
     private final Map<UUID, PlayerData> players = new ConcurrentHashMap<>();
+    // 正版玩家名索引：name(小写) → uuid，用于 getByName 快速查找，避免 O(n) 遍历
+    private final Map<String, UUID> premiumNameIndex = new ConcurrentHashMap<>();
 
     // REPLACE INTO 在 SQLite 与 MySQL 均支持：主键存在则先 DELETE 再 INSERT，否则直接 INSERT
     private static final String SQL_UPSERT =
@@ -102,19 +104,19 @@ public final class PlayerDataManager {
                     ")"
             );
             // 迁移：为旧表添加新列（ALTER TABLE ADD COLUMN 在列已存在时抛异常，忽略即可）
-            addColumnIfMissing(stmt, conn, "players", "name", "VARCHAR(16)");
-            addColumnIfMissing(stmt, conn, "players", "premium", "BOOLEAN NOT NULL DEFAULT 0");
-            addColumnIfMissing(stmt, conn, "players", "properties", "TEXT");
+            addColumnIfMissing(stmt, conn, "name", "VARCHAR(16)");
+            addColumnIfMissing(stmt, conn, "premium", "BOOLEAN NOT NULL DEFAULT 0");
+            addColumnIfMissing(stmt, conn, "properties", "TEXT");
         } catch (SQLException e) {
             plugin.getLogger().severe(I18n.get("log.init_table_failed", e.getMessage()));
         }
     }
 
     /** 安全添加列：若列不存在则执行 ALTER TABLE ADD COLUMN */
-    private void addColumnIfMissing(Statement stmt, Connection conn, String table, String column, String type) {
-        try (ResultSet rs = conn.getMetaData().getColumns(null, null, table, column)) {
+    private void addColumnIfMissing(Statement stmt, Connection conn, String column, String type) {
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, "players", column)) {
             if (!rs.next()) {
-                stmt.executeUpdate("ALTER TABLE " + table + " ADD COLUMN " + column + " " + type);
+                stmt.executeUpdate("ALTER TABLE " + "players" + " ADD COLUMN " + column + " " + type);
             }
         } catch (SQLException ignored) {
             // 列已存在或其他异常，忽略
@@ -124,6 +126,7 @@ public final class PlayerDataManager {
     /** 启动时全量加载玩家数据到内存缓存 */
     public void load() {
         players.clear();
+        premiumNameIndex.clear();
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(
@@ -141,6 +144,9 @@ public final class PlayerDataManager {
                         rs.getString("properties")
                 );
                 players.put(uuid, data);
+                if (data.premium() && data.name() != null) {
+                    premiumNameIndex.put(data.name().toLowerCase(), uuid);
+                }
             }
         } catch (SQLException e) {
             plugin.getLogger().severe(I18n.get("log.load_players_failed", e.getMessage()));
@@ -209,6 +215,11 @@ public final class PlayerDataManager {
         return players.containsKey(uuid);
     }
 
+    /** 数据库中是否存在正版玩家（premium=1），用于缺少 PacketEvents 时提示账号丢失风险 */
+    public boolean hasPremiumPlayers() {
+        return !premiumNameIndex.isEmpty();
+    }
+
     public PlayerData getPlayer(UUID uuid) {
         return players.get(uuid);
     }
@@ -231,6 +242,9 @@ public final class PlayerDataManager {
     public void createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
         PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties);
         players.put(uuid, data);
+        if (name != null) {
+            premiumNameIndex.put(name.toLowerCase(), uuid);
+        }
         save(uuid);
     }
 
@@ -238,9 +252,16 @@ public final class PlayerDataManager {
     public void markPremium(UUID uuid, String name, String properties) {
         PlayerData data = players.get(uuid);
         if (data == null) return;
+        // 更新索引：移除旧名映射，添加新名映射
+        if (data.name() != null) {
+            premiumNameIndex.remove(data.name().toLowerCase());
+        }
         data.premium(true);
         data.properties(properties);
         data.name(name);
+        if (name != null) {
+            premiumNameIndex.put(name.toLowerCase(), uuid);
+        }
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_PREMIUM)) {
@@ -255,23 +276,11 @@ public final class PlayerDataManager {
         });
     }
 
-    /** 更新玩家名（登录时同步最新名称） */
-    public void updateName(UUID uuid, String name) {
-        PlayerData data = players.get(uuid);
-        if (data == null) return;
-        data.name(name);
-        save(uuid);
-    }
-
     /** 按玩家名查询（用于正版验证 LoginStart 阶段，仅返回 premium=1 的记录） */
     public PlayerData getByName(String name) {
         if (name == null) return null;
-        for (PlayerData data : players.values()) {
-            if (name.equalsIgnoreCase(data.name()) && data.premium()) {
-                return data;
-            }
-        }
-        return null;
+        UUID uuid = premiumNameIndex.get(name.toLowerCase());
+        return uuid != null ? players.get(uuid) : null;
     }
 
     /** 是否为正版账号（premium=1） */
@@ -281,7 +290,10 @@ public final class PlayerDataManager {
     }
 
     public void removePlayer(UUID uuid) {
-        players.remove(uuid);
+        PlayerData data = players.remove(uuid);
+        if (data != null && data.name() != null) {
+            premiumNameIndex.remove(data.name().toLowerCase());
+        }
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(SQL_DELETE)) {

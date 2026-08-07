@@ -101,10 +101,6 @@ protection:
       z: 0
       yaw: 0
       pitch: 0
-  # 背包保护：未登录玩家无法查看自己的背包
-  # 需要前置插件 PacketEvents
-  inventory:
-    enabled: false
 
 # 通用设置
 settings:

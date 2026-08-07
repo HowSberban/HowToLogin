@@ -34,6 +34,8 @@ dependencies {
     compileOnly("org.mindrot:jbcrypt:0.4")
     compileOnly("me.clip:placeholderapi:2.11.6")
     compileOnly("com.github.retrooper:packetevents-spigot:2.13.0")
+    // authlib 运行时由 Paper 服务端提供，编译期需要用于 GameProfile/Property（PlayerInjector 设置 authenticatedProfile）
+    compileOnly("com.mojang:authlib:9.0.75")
 }
 
 configurations.configureEach {

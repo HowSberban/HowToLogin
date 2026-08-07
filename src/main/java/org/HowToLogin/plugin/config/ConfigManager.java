@@ -66,7 +66,6 @@ public final class ConfigManager {
     private double protectionPosFixedZ;
     private float protectionPosFixedYaw;
     private float protectionPosFixedPitch;
-    private boolean protectionInventoryEnabled;
 
     // 通用设置
     private boolean realUnreg;
@@ -200,8 +199,6 @@ public final class ConfigManager {
         this.protectionPosFixedZ = config.getDouble("protection.pos.fixed.z", 0);
         this.protectionPosFixedYaw = (float) config.getDouble("protection.pos.fixed.yaw", 0);
         this.protectionPosFixedPitch = (float) config.getDouble("protection.pos.fixed.pitch", 0);
-        // 背包保护：未登录玩家的背包和末影箱无法被其他玩家查看
-        this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", true);
 
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
 
@@ -287,7 +284,6 @@ public final class ConfigManager {
     public double protectionPosFixedZ() { return protectionPosFixedZ; }
     public float protectionPosFixedYaw() { return protectionPosFixedYaw; }
     public float protectionPosFixedPitch() { return protectionPosFixedPitch; }
-    public boolean protectionInventoryEnabled() { return protectionInventoryEnabled; }
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }

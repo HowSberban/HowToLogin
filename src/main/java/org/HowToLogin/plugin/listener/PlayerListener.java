@@ -17,9 +17,7 @@ import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.FoodLevelChangeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.*;
-import org.bukkit.inventory.InventoryHolder;
 
 import java.util.Locale;
 
@@ -81,6 +79,7 @@ public final class PlayerListener implements Listener {
             // IP 不一致时需传送到退出位置
             boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
             authManager.loginByPremium(player);
+            player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
             if (!ipAutoLogin) {
                 authManager.returnToLogoutLocation(player);
             }
@@ -352,23 +351,6 @@ public final class PlayerListener implements Listener {
     }
 
     // ===== 以下为新增事件监听 =====
-
-    // 背包保护：阻止查看未登录玩家的背包或末影箱
-    // InventoryHolder 为 Player 时表示打开的是某玩家的背包或末影箱
-    // target == viewer 的情况（玩家打开自己的背包/末影箱）由 prevent.inventory 控制，此处不干预
-    @EventHandler(priority = EventPriority.LOWEST)
-    public void onInventoryOpen(InventoryOpenEvent event) {
-        if (!plugin.getConfigManager().protectionInventoryEnabled()) return;
-        if (!(event.getPlayer() instanceof Player viewer)) return;
-
-        InventoryHolder holder = event.getInventory().getHolder();
-        // holder 为目标玩家时，检查该玩家是否未登录
-        if (holder instanceof Player target && !target.equals(viewer)
-                && !authManager.isLoggedIn(target)) {
-            event.setCancelled(true);
-            viewer.sendMessage(HTLogin.legacy(I18n.get("listener.inventory_protected", viewer, target.getName())));
-        }
-    }
 
     // 容器点击（含创造模式）
     @EventHandler(priority = EventPriority.LOWEST)

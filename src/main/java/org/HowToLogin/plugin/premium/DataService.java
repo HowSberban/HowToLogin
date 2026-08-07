@@ -1,5 +1,6 @@
 package org.howtologin.plugin.premium;
 
+import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 
@@ -19,17 +20,18 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class DataService {
 
     private final PlayerDataManager dataManager;
+    private final ConfigManager configManager;
 
     // 离线确认缓存：ip + "|" + name(小写) -> 到期时间戳（毫秒）
     // 命中后跳过正版验证，直接走离线登录流程
     private final Map<String, Long> offlineConfirmed = new ConcurrentHashMap<>();
 
-    // 离线确认缓存有效期（秒）
-    private final int crackerCacheSeconds;
+    // offlineConfirmed Map 大小阈值，超过时触发过期项清理
+    private static final int CLEANUP_THRESHOLD = 1000;
 
-    public DataService(PlayerDataManager dataManager, int crackerCacheSeconds) {
+    public DataService(PlayerDataManager dataManager, ConfigManager configManager) {
         this.dataManager = dataManager;
-        this.crackerCacheSeconds = crackerCacheSeconds;
+        this.configManager = configManager;
     }
 
     /**
@@ -73,8 +75,14 @@ public final class DataService {
      * 标记离线确认：该 IP + 名 在有效期内重连时跳过正版验证。
      */
     public void markOfflineConfirmed(String ip, String name) {
+        // 防止 Map 无限增长：超过阈值时清理过期项
+        // 攻击者可用不同 name+IP 组合高频触发此方法，懒删除无法清理未被查询的 key
+        if (offlineConfirmed.size() > CLEANUP_THRESHOLD) {
+            long now = System.currentTimeMillis();
+            offlineConfirmed.entrySet().removeIf(e -> e.getValue() <= now);
+        }
         offlineConfirmed.put(cacheKey(ip, name),
-                System.currentTimeMillis() + crackerCacheSeconds * 1000L);
+                System.currentTimeMillis() + configManager.premiumCrackerCacheSeconds() * 1000L);
     }
 
     /**
@@ -88,11 +96,6 @@ public final class DataService {
             return false;
         }
         return true;
-    }
-
-    /** 数据库中是否存在该 UUID 的账号 */
-    public boolean hasAccount(UUID uuid) {
-        return dataManager.hasAccount(uuid);
     }
 
     /** 计算离线 UUID（原版离线模式：UUID.nameUUIDFromBytes("OfflinePlayer:" + name)） */
