@@ -25,9 +25,9 @@ public final class DataService {
     // 离线确认缓存：ip + "|" + name(小写) -> 到期时间戳（毫秒）
     // 命中后跳过正版验证，直接走离线登录流程
     private final Map<String, Long> offlineConfirmed = new ConcurrentHashMap<>();
-
-    // offlineConfirmed Map 大小阈值，超过时触发过期项清理
-    private static final int CLEANUP_THRESHOLD = 1000;
+    // 正版密码回退标记：ip + "|" + name(小写) -> 到期时间戳（毫秒）
+    // 正版验证失败后记录，玩家重连时命中则跳过正版验证、以正版 UUID 进入并用密码登录
+    private final Map<String, Long> premiumFallbackConfirmed = new ConcurrentHashMap<>();
 
     public DataService(PlayerDataManager dataManager, ConfigManager configManager) {
         this.dataManager = dataManager;
@@ -62,27 +62,37 @@ public final class DataService {
     /**
      * 保存正版玩家数据（同时更新内存 + 异步落盘）。
      * 若已有账号则标记为 premium，否则创建新记录。
+     * @return 首次注册时生成的随机明文密码，非首次（markPremium）返回 null
      */
-    public void savePremium(UUID uuid, String name, String ip, String propertiesJson) {
+    public String savePremium(UUID uuid, String name, String ip, String propertiesJson) {
         if (dataManager.hasAccount(uuid)) {
             dataManager.markPremium(uuid, name, propertiesJson);
-        } else {
-            dataManager.createPremiumPlayer(uuid, name, ip, propertiesJson);
+            return null;
         }
+        return dataManager.createPremiumPlayer(uuid, name, ip, propertiesJson);
+    }
+
+    /**
+     * 将离线账号迁移到正版账号（离线升级为正版）。
+     * 透传 PlayerDataManager，保留退出位置等数据并标记 premium=1。
+     * @return 升级时生成的随机明文密码，迁移失败返回 null
+     */
+    public String migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String propertiesJson) {
+        return dataManager.migrateToPremium(offlineUuid, premiumUuid, name, ip, propertiesJson);
+    }
+
+    /** 按玩家名查询正版账号（premium=1），用于正版验证失败时回退密码登录的 UUID 定位 */
+    public PlayerData getByName(String name) {
+        return dataManager.getByName(name);
     }
 
     /**
      * 标记离线确认：该 IP + 名 在有效期内重连时跳过正版验证。
      */
     public void markOfflineConfirmed(String ip, String name) {
-        // 防止 Map 无限增长：超过阈值时清理过期项
-        // 攻击者可用不同 name+IP 组合高频触发此方法，懒删除无法清理未被查询的 key
-        if (offlineConfirmed.size() > CLEANUP_THRESHOLD) {
-            long now = System.currentTimeMillis();
-            offlineConfirmed.entrySet().removeIf(e -> e.getValue() <= now);
-        }
         offlineConfirmed.put(cacheKey(ip, name),
                 System.currentTimeMillis() + configManager.premiumCrackerCacheSeconds() * 1000L);
+        enforceCap(offlineConfirmed);
     }
 
     /**
@@ -98,6 +108,37 @@ public final class DataService {
         return true;
     }
 
+    /**
+     * 标记正版验证回退：该 IP + 名 在有效期内重连时跳过正版验证，
+     * 以正版 UUID 身份进入并用密码登录（复用离线标记机制）。
+     * 用于正版玩家使用离线启动器（无法完成加密握手）或正版验证失败放行的场景。
+     */
+    public void markPremiumFallbackConfirmed(String ip, String name) {
+        premiumFallbackConfirmed.put(cacheKey(ip, name),
+                System.currentTimeMillis() + configManager.premiumCrackerCacheSeconds() * 1000L);
+        enforceCap(premiumFallbackConfirmed);
+    }
+
+    /**
+     * 检查正版验证回退标记是否有效。
+     */
+    public boolean isPremiumFallbackConfirmed(String ip, String name) {
+        Long expire = premiumFallbackConfirmed.get(cacheKey(ip, name));
+        if (expire == null) return false;
+        if (System.currentTimeMillis() > expire) {
+            premiumFallbackConfirmed.remove(cacheKey(ip, name));
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 清除正版验证回退标记（正版验证成功后调用，确保下次优先走正常正版验证免密登录）。
+     */
+    public void clearPremiumFallbackConfirmed(String ip, String name) {
+        premiumFallbackConfirmed.remove(cacheKey(ip, name));
+    }
+
     /** 计算离线 UUID（原版离线模式：UUID.nameUUIDFromBytes("OfflinePlayer:" + name)） */
     public static UUID offlineUuid(String name) {
         return UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -105,6 +146,31 @@ public final class DataService {
 
     private static String cacheKey(String ip, String name) {
         return ip + "|" + name.toLowerCase();
+    }
+
+    /**
+     * 强制缓存容量不超过配置的硬上限（premium.cache-cap）。
+     * 攻击者可用不同 name+IP 组合高频触发标记并持续刷新，使过期清理永不到达，
+     * 导致 Map 无限增长。故超限时先清理已过期项，仍超限则逐出最早到期的活跃项。
+     * 仅在标记写入时调用，超限场景下 O(n)，正常路径零开销。
+     */
+    private void enforceCap(Map<String, Long> map) {
+        int cap = configManager.premiumCacheCap();
+        if (cap <= 0 || map.size() <= cap) return;
+        long now = System.currentTimeMillis();
+        // 先清已过期项
+        map.entrySet().removeIf(e -> e.getValue() <= now);
+        // 仍超限则不断逐出最早到期的项（最早到期 = 最不必需保留）
+        while (map.size() > cap) {
+            Map.Entry<String, Long> earliest = null;
+            for (Map.Entry<String, Long> e : map.entrySet()) {
+                if (earliest == null || e.getValue() < earliest.getValue()) {
+                    earliest = e;
+                }
+            }
+            if (earliest == null) break;
+            map.remove(earliest.getKey());
+        }
     }
 
     /**

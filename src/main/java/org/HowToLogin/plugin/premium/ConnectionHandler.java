@@ -14,6 +14,8 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 
 import javax.crypto.Cipher;
 import java.net.InetSocketAddress;
@@ -52,6 +54,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     private final DataService dataService;
     private final MojangClient mojangClient;
     private final PlayerInjector playerInjector;
+    private final AuthManager authManager;
     private final KeyPair rsaKeyPair;
     private final byte[] publicKeyEncoded;
 
@@ -65,12 +68,13 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public ConnectionHandler(HTLogin plugin, DataService dataService, MojangClient mojangClient,
-                             PlayerInjector playerInjector) {
+                             PlayerInjector playerInjector, AuthManager authManager) {
         super(PacketListenerPriority.LOWEST);
         this.plugin = plugin;
         this.dataService = dataService;
         this.mojangClient = mojangClient;
         this.playerInjector = playerInjector;
+        this.authManager = authManager;
         this.rsaKeyPair = generateKeyPair();
         this.publicKeyEncoded = rsaKeyPair.getPublic().getEncoded();
     }
@@ -104,22 +108,44 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         //    premium=1 玩家始终走正版验证，防止管理员关掉正版验证后已注册正版玩家掉线丢账号
         DataService.ProfileResult profile = dataService.getProfile(username);
 
-        // 存在且 premium=0 → 离线玩家，不拦截
+        boolean upgradeAttempt = false;
         if (profile.exists() && !profile.premium()) {
-            return;
+            // 2. 离线玩家：仅当正版验证总开关开启且有升级标记时拦截做正版验证
+            //    （升级成功则迁移账号，失败则回退离线），否则不拦截，由服务端原生处理
+            if (!plugin.getConfigManager().premiumEnabled() || !authManager.hasPendingUpgrade(profile.uuid())) {
+                return;
+            }
+            upgradeAttempt = true;
         }
 
-        // 2. 新玩家（不在数据库）：仅当正版验证开启时才拦截验证，否则按离线处理
+        // 3. 新玩家（不在数据库）：仅当正版验证开启时才拦截验证，否则按离线处理
         //    同时检查离线确认标记，避免离线客户端反复尝试正版验证
         //    已注册玩家（含 premium=1）不受离线标记影响，防止同名离线玩家抢占正版账号
+        //    升级尝试不受离线标记与 premium.enabled 影响（玩家已主动选择升级）
         if (!profile.exists()) {
             if (!plugin.getConfigManager().premiumEnabled()) return;
             if (dataService.isOfflineConfirmed(ip, username)) return;
         }
 
+        // 4. 已注册正版玩家且回退标记有效（上次验证失败/离线启动器断开）：
+        //    跳过加密握手，直接以正版 UUID 进入并用密码登录（复用离线标记机制，避免死循环踢出）
+        if (profile.exists() && profile.premium()
+                && plugin.getConfigManager().premiumPasswordFallbackEnabled()
+                && dataService.isPremiumFallbackConfirmed(ip, username)) {
+            plugin.getLogger().info(I18n.get("log.premium_fallback_login", username, ip));
+            event.setCancelled(true);
+            // 标记本次需密码登录，onJoin 时不自动免密
+            authManager.markPremiumFallback(profile.uuid());
+            SessionContext session = new SessionContext();
+            session.username(username);
+            session.ip(ip);
+            proceedWithLogin(channel, user, session, profile.uuid(), username, profile.properties());
+            return;
+        }
+
         plugin.getLogger().info(I18n.get("log.premium_verifying", username, ip));
 
-        // 3. premium=1 或新玩家 → 取消 LoginStart，走正版验证流程
+        // 5. premium=1/新玩家/升级尝试 → 取消 LoginStart，走正版验证流程
         event.setCancelled(true);
 
         // 清理旧会话（同一 channel 不应有多条 LoginStart，但防御性处理）
@@ -129,9 +155,14 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         SessionContext session = new SessionContext();
         session.username(username);
         session.ip(ip);
+        session.upgradeAttempt(upgradeAttempt);
+        session.premiumAccount(profile.exists() && profile.premium());
+        if (upgradeAttempt) {
+            session.offlineUuid(profile.uuid());
+        }
         sessions.put(channel, session);
 
-        // 4. 生成验证令牌并发送 EncryptionRequest
+        // 5. 生成验证令牌并发送 EncryptionRequest
         byte[] verifyToken = new byte[4];
         SECURE_RANDOM.nextBytes(verifyToken);
         session.verifyToken(verifyToken);
@@ -140,8 +171,9 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                 new WrapperLoginServerEncryptionRequest("", rsaKeyPair.getPublic(), verifyToken);
         user.sendPacket(request);
 
-        // 5. 注册断开检测器：若在收到 EncryptionResponse 之前断开，确认为离线客户端
-        // 仅对新玩家标记离线：已注册玩家（含 premium=1）由数据库决定身份，无需离线标记
+        // 6. 注册断开检测器：若在收到 EncryptionResponse 之前断开，确认为离线客户端
+        // 新玩家 → 标记离线确认（重连走离线登录）；已注册正版玩家 → 标记正版回退（重连以正版 UUID 密码登录）
+        // 升级玩家在验证期间断开 → 回退离线，清除升级标记
         // 防御性移除同名旧处理器
         final boolean isNewPlayer = !profile.exists();
         try { channel.pipeline().remove(DETECTOR_NAME); } catch (Exception ignored) {}
@@ -149,10 +181,18 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             @Override
             public void channelInactive(ChannelHandlerContext ctx) {
                 SessionContext s = sessions.get(channel);
-                if (s != null && s.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE
-                        && isNewPlayer) {
-                    // 新玩家在收到 EncryptionResponse 前断开 → 离线客户端
-                    dataService.markOfflineConfirmed(s.ip(), s.username());
+                if (s != null && s.stage() == SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE) {
+                    if (isNewPlayer) {
+                        // 新玩家在收到 EncryptionResponse 前断开 → 离线客户端
+                        dataService.markOfflineConfirmed(s.ip(), s.username());
+                    } else if (s.isUpgradeAttempt()) {
+                        // 升级尝试在验证前断开 → 回退离线，清除升级标记
+                        authManager.clearUpgradePending(s.offlineUuid());
+                    } else if (s.premiumAccount() && plugin.getConfigManager().premiumPasswordFallbackEnabled()) {
+                        // 已注册正版玩家使用离线启动器，无法回应 EncryptionRequest 即断开 →
+                        // 记录回退标记，下次重连跳过正版验证，以正版 UUID 进入并用密码登录
+                        dataService.markPremiumFallbackConfirmed(s.ip(), s.username());
+                    }
                 }
                 sessions.remove(channel);
                 ctx.fireChannelInactive();
@@ -161,7 +201,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
         session.advance(SessionContext.Stage.START, SessionContext.Stage.WAITING_ENCRYPTION_RESPONSE);
 
-        // 6. 调度超时清理：预防恶意客户端收到 EncryptionRequest 后既不回传也不断开，
+        // 7. 调度超时清理：预防恶意客户端收到 EncryptionRequest 后既不回传也不断开，
         // 导致会话永久滞留 sessions Map 造成内存泄漏（断开检测器只在 channelInactive 时触发）
         // 仅当当前会话仍为本会话且处于等待阶段时才清理，避免误伤同一 channel 上的新会话
         // 将 ScheduledFuture 存入会话，供清理/断开时取消，避免任务在会话结束后仍触发
@@ -173,7 +213,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                 cleanupSession(channel);
                 channel.close();
             }
-        }, 30_000L, TimeUnit.MILLISECONDS));
+        }, plugin.getConfigManager().premiumHandshakeTimeoutMs(), TimeUnit.MILLISECONDS));
     }
 
     // ===== 阶段2-3：加密握手与启用 =====
@@ -231,7 +271,20 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             mojangClient.hasJoined(serverHash, username).thenAccept(premiumProfile -> {
                 try {
                     if (premiumProfile.isEmpty()) {
-                        // 验证失败：经加密通道发送 Disconnect
+                        // 验证失败
+                        if (session.isUpgradeAttempt()) {
+                            // 升级尝试回退为离线账号，清除升级标记，玩家重进后按离线登录
+                            authManager.clearUpgradePending(session.offlineUuid());
+                        }
+                        // 正版验证失败回退：数据库正版账号且配置开启时，放行以正版 UUID 进入，
+                        // 用密码登录（继承正版数据），下次正版验证成功即自动免密
+                        PlayerData premiumData = premiumAccountByName(session, username);
+                        if (premiumData != null && plugin.getConfigManager().premiumPasswordFallbackEnabled()) {
+                            authManager.markPremiumFallback(premiumData.uuid());
+                            proceedWithLogin(channel, user, session, premiumData.uuid(), username, premiumData.properties());
+                            return;
+                        }
+                        // 否则经加密通道发送 Disconnect 踢出
                         channel.eventLoop().execute(() -> {
                             if (channel.isActive()) {
                                 sendDisconnect(user, I18n.get("listener.premium_unavailable"));
@@ -245,38 +298,31 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                     String properties = premiumProfile.get().propertiesJson();
 
                     // 12. 保存正版数据（异步落盘）
-                    dataService.savePremium(uuid, username, session.ip(), properties);
+                    if (session.isUpgradeAttempt()) {
+                        // 升级成功：将离线账号迁移到正版 UUID（保留退出位置等数据）+ 迁移原版玩家数据（背包/成就/统计），清除升级标记
+                        authManager.stagePremiumPassword(uuid,
+                                dataService.migrateToPremium(session.offlineUuid(), uuid, username, session.ip(), properties));
+                        authManager.migratePlayerData(session.offlineUuid(), uuid);
+                        authManager.clearUpgradePending(session.offlineUuid());
+                    } else {
+                        // 首次注册：暂存随机明文密码，玩家 join 时提示并引导修改
+                        authManager.stagePremiumPassword(uuid,
+                                dataService.savePremium(uuid, username, session.ip(), properties));
+                    }
 
-                    // 13. 异步触发 AsyncPlayerPreLoginEvent
-                    playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> channel.eventLoop().execute(() -> {
-                        if (!channel.isActive()) {
-                            cleanupSession(channel);
-                            return;
-                        }
-                        if (!allowed) {
-                            // 被 KICK：经加密通道发送 Disconnect
-                            sendDisconnect(user, I18n.get("listener.premium_invalid_session"));
-                            cleanupSession(channel);
-                            return;
-                        }
-                        // 14. 设置 authenticatedProfile + state=VERIFYING
-                        // 服务端 tick() 会自然调用 verifyLoginAndFinishConnectionSetup：
-                        //   → canPlayerLogin（触发 PlayerLoginEvent）→ state=WAITING_FOR_DUPE_DISCONNECT
-                        //   → finishLoginAndWaitForClient → 发送 LoginSuccess（含正版 UUID + 皮肤）
-                        //   → state=PROTOCOL_SWITCHING
-                        // 客户端收到 LoginSuccess 后发送 LoginAcknowledged，服务端自然接手协议切换
-                        try {
-                            playerInjector.setProfileAndAdvanceState(channel, uuid, username, properties);
-                            session.advance(SessionContext.Stage.ENCRYPTED, SessionContext.Stage.DONE);
-                        } catch (Exception e) {
-                            plugin.getLogger().severe(I18n.get("log.premium_state_advance_failed", e.toString()));
-                            sendDisconnect(user, I18n.get("listener.premium_unavailable"));
-                        } finally {
-                            cleanupSession(channel);
-                        }
-                    }));
+                    // 清除上次可能残留的正版回退标记（本次验证成功，应自动免密）
+                    // 同时清除 ip+名 回退标记，确保下次优先走正常正版验证
+                    authManager.clearPremiumFallback(uuid);
+                    dataService.clearPremiumFallbackConfirmed(session.ip(), session.username());
+
+                    // 13. 进入游戏（异步触发 AsyncPlayerPreLoginEvent + 推进 state）
+                    proceedWithLogin(channel, user, session, uuid, username, properties);
                 } catch (Exception e) {
                     // 异步链兜底：savePremium 等同步操作异常时也要清理会话，避免泄漏
+                    // 升级尝试异常时回退离线，清除升级标记
+                    if (session.isUpgradeAttempt()) {
+                        authManager.clearUpgradePending(session.offlineUuid());
+                    }
                     plugin.getLogger().severe(I18n.get("log.premium_async_failed", e.getMessage()));
                     channel.eventLoop().execute(() -> {
                         if (channel.isActive()) {
@@ -301,6 +347,50 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             return addr.getAddress().getHostAddress();
         }
         return null;
+    }
+
+    /**
+     * 定位该会话对应的数据库正版账号（premium=1）。
+     * 仅当会话确认为数据库正版账号（非升级尝试、非新玩家）时返回，否则返回 null，
+     * 避免升级失败或新玩家意外触发密码回退。
+     */
+    private PlayerData premiumAccountByName(SessionContext session, String username) {
+        if (!session.premiumAccount()) return null;
+        PlayerData data = dataService.getByName(username);
+        return data != null && data.premium() ? data : null;
+    }
+
+    /**
+     * 进入游戏：异步触发 AsyncPlayerPreLoginEvent，然后设置 authenticatedProfile + state=VERIFYING，
+     * 让服务端 tick() 自然调用 verifyLoginAndFinishConnectionSetup：
+     *   → canPlayerLogin（触发 PlayerLoginEvent）→ state=WAITING_FOR_DUPE_DISCONNECT
+     *   → finishLoginAndWaitForClient → 发送 LoginSuccess（含 UUID + 皮肤）→ state=PROTOCOL_SWITCHING
+     * 客户端收到 LoginSuccess 后发送 LoginAcknowledged，服务端自然接手协议切换。
+     * 正版验证成功与失败回退共用此方法。
+     */
+    @SuppressWarnings("resource") // EventLoop 为长生命周期资源，不应关闭
+    private void proceedWithLogin(Channel channel, User user, SessionContext session,
+                                  UUID uuid, String username, String properties) {
+        playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> channel.eventLoop().execute(() -> {
+            if (!channel.isActive()) {
+                cleanupSession(channel);
+                return;
+            }
+            if (!allowed) {
+                // 被 KICK：经加密通道发送 Disconnect
+                sendDisconnect(user, I18n.get("listener.premium_invalid_session"));
+                cleanupSession(channel);
+                return;
+            }
+            try {
+                playerInjector.setProfileAndAdvanceState(channel, uuid, username, properties);
+            } catch (Exception e) {
+                plugin.getLogger().severe(I18n.get("log.premium_state_advance_failed", e.toString()));
+                sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+            } finally {
+                cleanupSession(channel);
+            }
+        }));
     }
 
     /**

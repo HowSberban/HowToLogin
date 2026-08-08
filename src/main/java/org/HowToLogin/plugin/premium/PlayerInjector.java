@@ -17,6 +17,8 @@ import java.lang.reflect.Field;
 import java.net.InetAddress;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 玩家注入器（模块4）—— authenticatedProfile 设置 + state 推进。
@@ -38,9 +40,19 @@ import java.util.concurrent.CompletableFuture;
 public final class PlayerInjector {
 
     private final HTLogin plugin;
+    // 专用线程池：fireAsyncPreLogin 内部同步 callEvent() 调用所有监听器（可能较慢阻塞），
+    // 用专用受控线程池避免占用公共 ForkJoinPool 拖累其它插件的异步任务。
+    // 池大小沿用 premium.http-pool-size 配置（正版验证异步任务池）
+    private final ExecutorService preLoginExecutor;
 
     public PlayerInjector(HTLogin plugin) {
         this.plugin = plugin;
+        int poolSize = Math.max(1, plugin.getConfigManager().premiumHttpPoolSize());
+        this.preLoginExecutor = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread t = new Thread(r, "HTLogin-PreLogin");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     /**
@@ -64,7 +76,7 @@ public final class PlayerInjector {
                 plugin.getLogger().warning(I18n.get("log.premium_prelogin_failed", name, e.getMessage()));
                 return false;
             }
-        });
+        }, preLoginExecutor);
     }
 
     /**

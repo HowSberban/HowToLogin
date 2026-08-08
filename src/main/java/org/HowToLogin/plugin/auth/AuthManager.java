@@ -35,6 +35,12 @@ public final class AuthManager {
     private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
     // 记录最近注销的玩家时间戳：5 秒内拒绝重连，确保 .dat 删除完成
     private final Map<UUID, Long> recentUnregister = new ConcurrentHashMap<>();
+    // 待升级离线账号（离线 UUID）：玩家执行升级指令后标记，下次登录时尝试正版验证
+    private final Set<UUID> pendingUpgrade = ConcurrentHashMap.newKeySet();
+    // 首次注册/升级正版账号的待提示明文密码（正版 UUID → 明文）：玩家 join 时发送并移除
+    private final Map<UUID, String> pendingPremiumPassword = new ConcurrentHashMap<>();
+    // 正版验证失败回退进入的正版玩家（正版 UUID）：本次需密码登录，不自动免密
+    private final Set<UUID> premiumFallback = ConcurrentHashMap.newKeySet();
     // 登录超时任务启动时间戳：用于判断超时任务是否为最新（重启时旧任务自动失效）
     private final Map<UUID, Long> loginTimeoutStartedAt = new ConcurrentHashMap<>();
     // 缓存世界结构类型：26.1+ 采用新结构（players/data + dimensions/minecraft/overworld）
@@ -152,6 +158,8 @@ public final class AuthManager {
             // 登录成功，清零失败计数
             failedAttempts.remove(uuid);
             kickUntil.remove(uuid);
+            // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
+            clearPremiumFallback(uuid);
             onLoginSuccess(player);
             return true;
         }
@@ -264,12 +272,13 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
 
-        if (PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
-            String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
-            dataManager.updatePassword(uuid, newHash);
-            return true;
+        // 正版账号免密登录，密码哈希为随机占位、玩家未知，跳过旧密码校验，直接设置新密码
+        if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+            return false;
         }
-        return false;
+        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
+        dataManager.updatePassword(uuid, newHash);
+        return true;
     }
 
     // Unregister
@@ -359,39 +368,85 @@ public final class AuthManager {
      */
     private boolean deletePlayerData(UUID uuid) {
         World world = Bukkit.getWorlds().getFirst();
-        File worldDir = world.getWorldFolder();
-
-        File worldRoot;
-        if (newWorldStructure) {
-            // 26.1+：worldDir 是维度目录，向上 3 层到世界根目录
-            worldRoot = worldDir.getParentFile(); // minecraft
-            if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // dimensions
-            if (worldRoot != null) worldRoot = worldRoot.getParentFile(); // world 根
-        } else {
-            // 旧版：worldDir 即世界根目录
-            worldRoot = worldDir;
-        }
-
+        File worldRoot = worldRoot(world);
         if (worldRoot == null) {
-            plugin.getLogger().warning(I18n.get("log.player_data_dir_not_found", worldDir.getAbsolutePath()));
+            plugin.getLogger().warning(I18n.get("log.player_data_dir_not_found", world.getWorldFolder().getAbsolutePath()));
             return true; // 目录不存在视为无需删除，停止重试
         }
 
-        // 26.1+ 子目录在 players/ 下，旧版在根目录下（playerdata 名称也不同）
-        String dataDir = newWorldStructure ? "players/data" : "playerdata";
-        String advDir = newWorldStructure ? "players/advancements" : "advancements";
-        String statsDir = newWorldStructure ? "players/stats" : "stats";
-
+        String[] dirs = playerDataDirs();
         // 删除 .dat_old（备份文件，失败仅告警，不影响重试）
-        File datOldFile = new File(worldRoot, dataDir + "/" + uuid + ".dat_old");
+        File datOldFile = new File(worldRoot, dirs[0] + "/" + uuid + ".dat_old");
         if (datOldFile.exists() && !datOldFile.delete()) {
             plugin.getLogger().warning(I18n.get("log.delete_player_data_backup_failed", datOldFile.getAbsolutePath()));
         }
 
         // 删除 .dat、advancements/.json、stats/.json，任一失败则重试
-        return deletePlayerFile(new File(worldRoot, dataDir), uuid, ".dat")
-                && deletePlayerFile(new File(worldRoot, advDir), uuid, ".json")
-                && deletePlayerFile(new File(worldRoot, statsDir), uuid, ".json");
+        return deletePlayerFile(new File(worldRoot, dirs[0]), uuid, ".dat")
+                && deletePlayerFile(new File(worldRoot, dirs[1]), uuid, ".json")
+                && deletePlayerFile(new File(worldRoot, dirs[2]), uuid, ".json");
+    }
+
+    /**
+     * 将离线账号的原版玩家数据（player.dat、advancements、stats）迁移到正版 UUID。
+     * 升级后 UUID 变化，若不迁移这些文件，玩家的背包/成就/统计会丢失。
+     * 异步执行文件重命名（阻塞文件 IO，调用方无需关心线程）。
+     */
+    public void migratePlayerData(UUID fromUuid, UUID toUuid) {
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            World world = Bukkit.getWorlds().getFirst();
+            File worldRoot = worldRoot(world);
+            if (worldRoot == null) {
+                plugin.getLogger().warning(I18n.get("log.player_data_dir_not_found", world.getWorldFolder().getAbsolutePath()));
+                return;
+            }
+            String[] dirs = playerDataDirs();
+            renamePlayerFile(new File(worldRoot, dirs[0]), fromUuid, toUuid, ".dat");
+            renamePlayerFile(new File(worldRoot, dirs[1]), fromUuid, toUuid, ".json");
+            renamePlayerFile(new File(worldRoot, dirs[2]), fromUuid, toUuid, ".json");
+        });
+    }
+
+    /** 将玩家文件 &lt;from&gt;.&lt;ext&gt; 重命名为 &lt;to&gt;.&lt;ext&gt;（目标已存在则先删除旧目标） */
+    private void renamePlayerFile(File dir, UUID from, UUID to, String ext) {
+        if (!dir.isDirectory()) return;
+        File src = new File(dir, from + ext);
+        if (!src.exists()) return;
+        File dst = new File(dir, to + ext);
+        if (dst.exists() && !dst.delete()) {
+            plugin.getLogger().warning(I18n.get("log.migrate_failed", src.getAbsolutePath()));
+            return;
+        }
+        if (!src.renameTo(dst)) {
+            plugin.getLogger().warning(I18n.get("log.migrate_failed", src.getAbsolutePath()));
+        }
+    }
+
+    /**
+     * 计算世界根目录（玩家数据所在目录）。
+     * 26.1+：世界文件夹是维度目录 world/dimensions/minecraft/overworld，
+     *   玩家数据在其上级 3 层的世界根目录下；旧版：世界文件夹即根目录。
+     */
+    private File worldRoot(World world) {
+        // Paper 的 getWorldFolder() @NotNull，无需判空；26.1+ 向上 3 层到世界根目录
+        File worldDir = world.getWorldFolder();
+        if (!newWorldStructure) return worldDir;
+        // 26.1+：向上 3 层到世界根目录
+        File root = worldDir.getParentFile(); // minecraft
+        if (root != null) root = root.getParentFile(); // dimensions
+        if (root != null) root = root.getParentFile(); // world 根
+        return root;
+    }
+
+    /**
+     * 玩家数据三个子目录（data/advancements/stats），兼容新旧世界结构。
+     * 26.1+ 在 players/ 下，旧版在根目录下（playerdata 名称也不同）。
+     */
+    private String[] playerDataDirs() {
+        if (newWorldStructure) {
+            return new String[]{"players/data", "players/advancements", "players/stats"};
+        }
+        return new String[]{"playerdata", "advancements", "stats"};
     }
 
     /**
@@ -560,6 +615,50 @@ public final class AuthManager {
 
     public boolean isPremium(UUID uuid) {
         return dataManager.isPremium(uuid);
+    }
+
+    // ===== 离线账号升级为正版 =====
+
+    /** 标记离线账号待升级为正版：下次登录时尝试正版验证，成功则迁移，失败则回退 */
+    public boolean markUpgradePending(UUID offlineUuid) {
+        return pendingUpgrade.add(offlineUuid);
+    }
+
+    /** 检查离线账号是否有升级标记 */
+    public boolean hasPendingUpgrade(UUID offlineUuid) {
+        return pendingUpgrade.contains(offlineUuid);
+    }
+
+    /** 清除升级标记（验证成功或失败回退时调用） */
+    public void clearUpgradePending(UUID offlineUuid) {
+        pendingUpgrade.remove(offlineUuid);
+    }
+
+    /** 暂存首次注册/升级正版账号的明文密码，供玩家 join 时提示（正版验证在握手阶段完成，尚无 Player 对象） */
+    public void stagePremiumPassword(UUID premiumUuid, String plainPassword) {
+        if (plainPassword != null) {
+            pendingPremiumPassword.put(premiumUuid, plainPassword);
+        }
+    }
+
+    /** 获取并移除待提示的明文密码（玩家 join 时调用），无则返回 null */
+    public String pollPremiumPassword(UUID premiumUuid) {
+        return pendingPremiumPassword.remove(premiumUuid);
+    }
+
+    /** 标记正版玩家本次为正版验证失败回退进入（需密码登录） */
+    public void markPremiumFallback(UUID premiumUuid) {
+        premiumFallback.add(premiumUuid);
+    }
+
+    /** 清除正版回退标记（密码登录成功或下次正版验证成功时调用） */
+    public void clearPremiumFallback(UUID premiumUuid) {
+        premiumFallback.remove(premiumUuid);
+    }
+
+    /** 正版玩家是否为验证失败回退进入（本次需密码登录） */
+    public boolean isPremiumFallback(UUID premiumUuid) {
+        return premiumFallback.contains(premiumUuid);
     }
 
     /**

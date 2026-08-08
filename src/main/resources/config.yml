@@ -51,9 +51,9 @@ register:
 
 # 密码规则
 password:
-  # 密码最小长度
+  # 密码最小长度（不得小于 4）
   min-length: 6
-  # 密码最大长度
+  # 密码最大长度（不得大于 128，且不得小于最小长度）
   max-length: 32
   # 密码哈希算法
   # bcrypt：更强的加密，但需要更多性能
@@ -124,3 +124,29 @@ premium:
   # 离线客户端首次失败后的重连缓存有效期（秒）
   # 检测到离线客户端后标记 IP+名，有效期内重连直接走离线登录
   cracker-cache-seconds: 120
+  # 加密握手阶段等待 EncryptionResponse 的超时（毫秒）
+  # 防止恶意客户端收到 EncryptionRequest 后既不回传也不断开，导致会话滞留内存
+  handshake-timeout-ms: 30000
+  # hasJoined 首次调用前等待（毫秒），确保客户端已 join Mojang sessionserver
+  initial-delay-ms: 1000
+  # hasJoined 可重试状态码（204/429/502/503/504）的最大重试次数（不含首次尝试）
+  max-retries: 2
+  # 重试指数退避基数（毫秒），第 n 次重试等待 base * 2^n
+  retry-backoff-base-ms: 5000
+  # Mojang hasJoined / 正版验证异步任务专用线程池大小
+  # 请求含 sleep + 退避重试为阻塞式任务，高并发正版验证时可按负载调大
+  http-pool-size: 2
+  # 离线确认/正版回退缓存硬上限
+  # 超过时先清过期项，仍超限则逐出最早到期的项，防止攻击者无限刷新导致内存膨胀
+  cache-cap: 1000
+  # 离线账号升级为正版账号
+  upgrade:
+    # 是否启用升级功能（玩家 /upgrade 标记后，下次进入尝试正版验证，成功则迁移账号，失败回退离线）
+    enabled: false
+  # 正版验证失败回退（仅对数据库中已注册的正版玩家生效），不建议开启
+  # 当正版验证失败（如 Mojang 服务不可用）时，放行该正版玩家以已记录的正版 UUID 身份进入，
+  # 使用密码登录以继承之前游玩的数据；下次正版验证成功时自动免密登录。
+  # 注意：此功能绕过正版验证，存在安全风险（攻击者若得知正版玩家的 /changepassword 密码即可登录），
+  # 且玩家需先通过 /changepassword 设置过密码或记住了随机密码，否则无法登录。默认关闭。
+  fallback:
+    enabled: false

@@ -74,6 +74,22 @@ public final class ConfigManager {
     private boolean premiumEnabled;
     private int premiumTimeoutSeconds;
     private int premiumCrackerCacheSeconds;
+    // 加密握手阶段等待 EncryptionResponse 的超时（毫秒），防止恶意客户端滞留会话
+    private int premiumHandshakeTimeoutMs;
+    // hasJoined 首次调用前等待（毫秒），确保客户端已 join Mojang sessionserver
+    private int premiumInitialDelayMs;
+    // hasJoined 可重试状态码的最大重试次数（不含首次尝试）
+    private int premiumMaxRetries;
+    // 重试指数退避基数（毫秒），第 n 次重试等待 base * 2^n
+    private long premiumRetryBackoffBaseMs;
+    // Mojang hasJoined 专用线程池大小（请求含 sleep/退避重试，阻塞式任务需独立线程）
+    private int premiumHttpPoolSize;
+    // 离线确认/正版回退缓存硬上限（超过则逐出最早过期项，防止攻击者无限刷新导致内存膨胀）
+    private int premiumCacheCap;
+    // 离线账号升级为正版
+    private boolean premiumUpgradeEnabled;
+    // 正版验证失败时允许正版玩家以密码登录（默认关闭，不安全）
+    private boolean premiumPasswordFallbackEnabled;
 
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -158,6 +174,21 @@ public final class ConfigManager {
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
         this.maxPasswordLength = config.getInt("password.max-length", 32);
+        // 密码长度配置校验：最小值不得小于 4
+        if (this.minPasswordLength < 4) {
+            plugin.getLogger().warning(I18n.get("log.password_min_length_clamped", this.minPasswordLength, 4));
+            this.minPasswordLength = 4;
+        }
+        // 最大值不得大于 128
+        if (this.maxPasswordLength > 128) {
+            plugin.getLogger().warning(I18n.get("log.password_max_length_clamped", this.maxPasswordLength, 128));
+            this.maxPasswordLength = 128;
+        }
+        // 最大值不得小于最小值
+        if (this.maxPasswordLength < this.minPasswordLength) {
+            plugin.getLogger().warning(I18n.get("log.password_length_range_invalid", this.maxPasswordLength, this.minPasswordLength));
+            this.maxPasswordLength = this.minPasswordLength;
+        }
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
         // 密码字符规则：正则表达式，为空表示不限制
         String patternStr = config.getString("password.pattern", "");
@@ -206,6 +237,14 @@ public final class ConfigManager {
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
         this.premiumTimeoutSeconds = config.getInt("premium.timeout-seconds", 10);
         this.premiumCrackerCacheSeconds = config.getInt("premium.cracker-cache-seconds", 120);
+        this.premiumHandshakeTimeoutMs = config.getInt("premium.handshake-timeout-ms", 30000);
+        this.premiumInitialDelayMs = config.getInt("premium.initial-delay-ms", 1000);
+        this.premiumMaxRetries = config.getInt("premium.max-retries", 2);
+        this.premiumRetryBackoffBaseMs = config.getLong("premium.retry-backoff-base-ms", 5000);
+        this.premiumHttpPoolSize = config.getInt("premium.http-pool-size", 2);
+        this.premiumCacheCap = config.getInt("premium.cache-cap", 1000);
+        this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
+        this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
 
         // 默认语言（控制台日志和客户端语言无匹配文件时使用）
         String defaultLanguage = config.getString("settings.default-language", "zh_CN");
@@ -292,5 +331,13 @@ public final class ConfigManager {
     public boolean premiumEnabled() { return premiumEnabled; }
     public int premiumTimeoutSeconds() { return premiumTimeoutSeconds; }
     public int premiumCrackerCacheSeconds() { return premiumCrackerCacheSeconds; }
+    public int premiumHandshakeTimeoutMs() { return premiumHandshakeTimeoutMs; }
+    public long premiumInitialDelayMs() { return premiumInitialDelayMs; }
+    public int premiumMaxRetries() { return premiumMaxRetries; }
+    public long premiumRetryBackoffBaseMs() { return premiumRetryBackoffBaseMs; }
+    public int premiumHttpPoolSize() { return premiumHttpPoolSize; }
+    public int premiumCacheCap() { return premiumCacheCap; }
+    public boolean premiumUpgradeEnabled() { return premiumUpgradeEnabled; }
+    public boolean premiumPasswordFallbackEnabled() { return premiumPasswordFallbackEnabled; }
 
 }

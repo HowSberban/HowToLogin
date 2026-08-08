@@ -38,6 +38,9 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
     private final AuthManager authManager;
     private final ConfigManager configManager;
 
+    // 构造器通过反射调用（HTLogin 中 Class.forName + getConstructor + newInstance），
+    // 静态分析无法追踪，故抑制"构造函数从未使用"的误报
+    @SuppressWarnings("unused")
     public InventoryPacketListener(AuthManager authManager, ConfigManager configManager) {
         super(PacketListenerPriority.LOW);
         this.authManager = authManager;

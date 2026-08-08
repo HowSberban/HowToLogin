@@ -74,12 +74,25 @@ public final class PlayerListener implements Listener {
 
         // 正版玩家免密登录：跳过密码验证，直接标记为已登录
         if (authManager.isPremium(player)) {
+            // 正版验证失败回退进入的玩家：本次需密码登录，不自动免密
+            if (authManager.isPremiumFallback(player.getUniqueId())) {
+                authManager.addPendingLogin(player);
+                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
+                scheduleLoginTimeout(player);
+                scheduleReminder(player, true);
+                return;
+            }
             // 先检查 IP 是否一致（决定是否需要传送）
             // IP 一致时 onSpawnLocation 已将出生点设为退出位置，无需传送
             // IP 不一致时需传送到退出位置
             boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
             authManager.loginByPremium(player);
             player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
+            // 首次注册/升级正版账号：发送随机明文密码并提示修改
+            String initialPassword = authManager.pollPremiumPassword(player.getUniqueId());
+            if (initialPassword != null) {
+                player.sendMessage(HTLogin.legacy(I18n.get("premium.first_join_password", initialPassword)));
+            }
             if (!ipAutoLogin) {
                 authManager.returnToLogoutLocation(player);
             }

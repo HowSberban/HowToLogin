@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.config.ConfigManager;
 
 import java.net.URI;
 import java.net.URLEncoder;
@@ -40,25 +41,20 @@ public final class MojangClient {
             .connectTimeout(Duration.ofSeconds(5))
             .build();
 
-    // 独立线程池：hasJoined 内部含 sleep + 指数退避重试，最长可阻塞约 16s，
-    // 用专用线程池避免占用公共 ForkJoinPool 拖累其它插件的异步任务
-    private static final ExecutorService HTTP_EXECUTOR = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, "HTLogin-Mojang");
-        t.setDaemon(true);
-        return t;
-    });
-
-    // 可重试的 HTTP 状态码（限流/临时不可用/未加入会话）
-    // Mojang 对同一 username 短时间内多次 hasJoined 会限流返回 204（未文档化）
-    // 频繁重试会加重限流，故重试次数少、间隔长（指数退避）
-    private static final int MAX_RETRIES = 2;
-    // 首次调用前等待，确保客户端已 join Mojang sessionserver
-    private static final long INITIAL_DELAY_MS = 1000L;
-
     private final HTLogin plugin;
+    // 独立线程池：hasJoined 内部含 sleep + 指数退避重试，最长可阻塞较久，
+    // 用专用线程池避免占用公共 ForkJoinPool 拖累其它插件的异步任务。
+    // 池大小由配置 premium.http-pool-size 控制（阻塞式任务，高并发正版验证时可按负载调大）
+    private final ExecutorService httpExecutor;
 
     public MojangClient(HTLogin plugin) {
         this.plugin = plugin;
+        int poolSize = Math.max(2, plugin.getConfigManager().premiumHttpPoolSize());
+        this.httpExecutor = Executors.newFixedThreadPool(poolSize, r -> {
+            Thread t = new Thread(r, "HTLogin-Mojang");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     /**
@@ -71,19 +67,23 @@ public final class MojangClient {
      */
     public CompletableFuture<Optional<PremiumProfile>> hasJoined(String serverHash, String username) {
         return CompletableFuture.supplyAsync(() -> {
+            ConfigManager config = plugin.getConfigManager();
+            int maxRetries = config.premiumMaxRetries();
+            long backoffBase = config.premiumRetryBackoffBaseMs();
+
             // 首次调用前等待，确保客户端已 join Mojang sessionserver
             // 客户端发 EncryptionResponse 后才 join Mojang，服务端可能更快到达 hasJoined
-            sleep(INITIAL_DELAY_MS);
+            sleep(config.premiumInitialDelayMs());
 
             String url = HAS_JOINED_API
                     + URLEncoder.encode(username, StandardCharsets.UTF_8)
                     + "&serverId=" + serverHash;
 
-            // 首次尝试 + 最多 MAX_RETRIES 次重试；重试耗尽（限流/超时持续）时由循环条件退出
-            for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            // 首次尝试 + 最多 maxRetries 次重试；重试耗尽（限流/超时持续）时由循环条件退出
+            for (int attempt = 0; attempt <= maxRetries; attempt++) {
                 try {
                     HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                            .timeout(Duration.ofSeconds(plugin.getConfigManager().premiumTimeoutSeconds()))
+                            .timeout(Duration.ofSeconds(config.premiumTimeoutSeconds()))
                             .header("User-Agent", USER_AGENT)
                             .header("Accept", "application/json")
                             .GET()
@@ -92,15 +92,16 @@ public final class MojangClient {
                     int code = response.statusCode();
 
                     if (code == 200) {
-                        String body = response.body();
-                        String id = extractId(body);
+                        // 只解析一次 JSON，复用 JsonObject 提取 id 与 properties
+                        JsonObject obj = parseJson(response.body());
+                        String id = obj == null ? null : extractId(obj);
                         if (id == null) {
                             plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
                                     username, "no id field"));
                             return Optional.empty();
                         }
                         UUID uuid = parseUuid(id);
-                        String properties = extractProperties(body);
+                        String properties = extractProperties(obj);
                         return Optional.of(new PremiumProfile(uuid, properties));
                     }
 
@@ -113,18 +114,18 @@ public final class MojangClient {
 
                     // 可重试状态码（204 未 join/限流，429/502/503/504 限流或临时不可用）：
                     // 若还有剩余尝试次数则指数退避后重试，否则不 sleep，由循环条件终止
-                    // 频繁重试会加重限流，故退避间隔较长（5s, 10s）
-                    if (attempt < MAX_RETRIES) {
+                    // 频繁重试会加重限流，故退避间隔较长（指数退避）
+                    if (attempt < maxRetries) {
                         plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
-                                username, attempt + 1, MAX_RETRIES));
-                        sleep(backoffDelay(attempt));
+                                username, attempt + 1, maxRetries));
+                        sleep(backoffDelay(backoffBase, attempt));
                     }
                 } catch (java.net.http.HttpTimeoutException e) {
                     // 请求/连接超时均抛 HttpTimeoutException（含其子类 HttpConnectTimeoutException）
-                    if (attempt < MAX_RETRIES) {
+                    if (attempt < maxRetries) {
                         plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
-                                username, attempt + 1, MAX_RETRIES));
-                        sleep(backoffDelay(attempt));
+                                username, attempt + 1, maxRetries));
+                        sleep(backoffDelay(backoffBase, attempt));
                     }
                 } catch (Exception e) {
                     plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
@@ -136,7 +137,7 @@ public final class MojangClient {
             plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
                     username, "max retries"));
             return Optional.empty();
-        }, HTTP_EXECUTOR);
+        }, httpExecutor);
     }
 
     /** 判断 HTTP 状态码是否可重试 */
@@ -144,9 +145,9 @@ public final class MojangClient {
         return code == 429 || code == 502 || code == 503 || code == 504;
     }
 
-    /** 指数退避延迟（毫秒）：attempt=0 → 5000ms，attempt=1 → 10000ms */
-    private static long backoffDelay(int attempt) {
-        return 5000L * (1L << attempt);
+    /** 指数退避延迟（毫秒）：attempt=0 → base，attempt=1 → 2*base */
+    private static long backoffDelay(long base, int attempt) {
+        return base * (1L << attempt);
     }
 
     /** 线程睡眠（不抛异常） */
@@ -154,25 +155,24 @@ public final class MojangClient {
         try { Thread.sleep(ms); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
     }
 
-    /** 从 JSON 中提取 "id" 字段的无横线 UUID 字符串 */
-    private static String extractId(String json) {
+    /** 解析 JSON 为 JsonObject，解析失败返回 null */
+    private static JsonObject parseJson(String json) {
         try {
-            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-            return obj.has("id") && !obj.get("id").isJsonNull() ? obj.get("id").getAsString() : null;
+            return JsonParser.parseString(json).getAsJsonObject();
         } catch (Exception e) {
             return null;
         }
     }
 
-    /** 从 JSON 中提取 "properties" 数组的原始 JSON 字符串（可能为 null） */
-    private static String extractProperties(String json) {
-        try {
-            JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-            JsonElement props = obj.get("properties");
-            return props == null || props.isJsonNull() ? null : props.toString();
-        } catch (Exception e) {
-            return null;
-        }
+    /** 从已解析的 JsonObject 中提取 "id" 字段的无横线 UUID 字符串 */
+    private static String extractId(JsonObject obj) {
+        return obj.has("id") && !obj.get("id").isJsonNull() ? obj.get("id").getAsString() : null;
+    }
+
+    /** 从已解析的 JsonObject 中提取 "properties" 数组的原始 JSON 字符串（可能为 null） */
+    private static String extractProperties(JsonObject obj) {
+        JsonElement props = obj.get("properties");
+        return props == null || props.isJsonNull() ? null : props.toString();
     }
 
     /** 将 Mojang 返回的无横线 UUID 解析为 UUID 对象 */
