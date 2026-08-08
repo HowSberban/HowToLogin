@@ -208,7 +208,15 @@ public final class HTLoginCommand {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             AuthManager auth = plugin.getAuthManager();
-            if (!auth.forceChangePassword(target.getUniqueId(), newPassword)) {
+            UUID uuid = target.getUniqueId();
+            // 离线 UUID 无账号时，尝试按名字解析正版账号（premium=1）。
+            // 正版玩家在数据库中为正版 UUID，而 getOfflinePlayer 在 offline-mode 服务端返回离线 UUID，
+            // 两者不匹配，否则 forcechangepw 对正版玩家永远报"账号不存在"
+            if (!plugin.getPlayerDataManager().hasAccount(uuid)) {
+                PlayerData premium = plugin.getPlayerDataManager().getByName(targetName);
+                if (premium != null) uuid = premium.uuid();
+            }
+            if (!auth.forceChangePassword(uuid, newPassword)) {
                 sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_not_found", sender)));
                 return;
             }
