@@ -258,7 +258,7 @@ public final class ConfigManager {
         this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
         this.premiumInitialDelayMs = clampInt("premium.initial-delay-ms", config.getInt("premium.initial-delay-ms", 1000), 0);
         this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
-        this.premiumRetryBackoffBaseMs = clampLong("premium.retry-backoff-base-ms", config.getLong("premium.retry-backoff-base-ms", 5000), 0);
+        this.premiumRetryBackoffBaseMs = clampInt("premium.retry-backoff-base-ms", config.getInt("premium.retry-backoff-base-ms", 5000), 0);
         this.premiumHttpPoolSize = clampInt("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
@@ -295,15 +295,6 @@ public final class ConfigManager {
 
     /** 整型配置校验：低于下限时调整为下限并告警，避免非法值导致运行时异常 */
     private int clampInt(String key, int value, int min) {
-        if (value < min) {
-            plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
-            return min;
-        }
-        return value;
-    }
-
-    /** 长整型配置校验：低于下限时调整为下限并告警 */
-    private long clampLong(String key, long value, long min) {
         if (value < min) {
             plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
             return min;
