@@ -3,7 +3,7 @@
 # HowToLogin
 
 简称`HTLogin`  
-一个 Minecraft 登录插件，支持 Paper 与 Folia
+一个 Minecraft 登录插件，使用 PaperAPI，支持 Folia 。
 
 </div>
 
