@@ -15,6 +15,7 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 
 import javax.crypto.Cipher;
@@ -94,6 +95,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     private void handleLoginStart(PacketReceiveEvent event) {
         Channel channel = (Channel) event.getChannel();
         User user = event.getUser();
+        ConfigManager config = plugin.getConfigManager();
 
         WrapperLoginClientLoginStart wrapper = new WrapperLoginClientLoginStart(event);
         String username = wrapper.getUsername();
@@ -112,7 +114,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         if (profile.exists() && !profile.premium()) {
             // 2. 离线玩家：仅当正版验证总开关开启且有升级标记时拦截做正版验证
             //    （升级成功则迁移账号，失败则回退离线），否则不拦截，由服务端原生处理
-            if (!plugin.getConfigManager().premiumEnabled() || !authManager.hasPendingUpgrade(profile.uuid())) {
+            if (!config.premiumEnabled() || !authManager.hasPendingUpgrade(profile.uuid())) {
                 return;
             }
             upgradeAttempt = true;
@@ -123,14 +125,14 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         //    已注册玩家（含 premium=1）不受离线标记影响，防止同名离线玩家抢占正版账号
         //    升级尝试不受离线标记与 premium.enabled 影响（玩家已主动选择升级）
         if (!profile.exists()) {
-            if (!plugin.getConfigManager().premiumEnabled()) return;
+            if (!config.premiumEnabled()) return;
             if (dataService.isOfflineConfirmed(ip, username)) return;
         }
 
         // 4. 已注册正版玩家且回退标记有效（上次验证失败/离线启动器断开）：
         //    跳过加密握手，直接以正版 UUID 进入并用密码登录（复用离线标记机制，避免死循环踢出）
         if (profile.exists() && profile.premium()
-                && plugin.getConfigManager().premiumPasswordFallbackEnabled()
+                && config.premiumPasswordFallbackEnabled()
                 && dataService.isPremiumFallbackConfirmed(ip, username)) {
             plugin.getLogger().info(I18n.get("log.premium_fallback_login", username, ip));
             event.setCancelled(true);
@@ -188,7 +190,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                     } else if (s.isUpgradeAttempt()) {
                         // 升级尝试在验证前断开 → 回退离线，清除升级标记
                         authManager.clearUpgradePending(s.offlineUuid());
-                    } else if (s.premiumAccount() && plugin.getConfigManager().premiumPasswordFallbackEnabled()) {
+                    } else if (s.premiumAccount() && config.premiumPasswordFallbackEnabled()) {
                         // 已注册正版玩家使用离线启动器，无法回应 EncryptionRequest 即断开 →
                         // 记录回退标记，下次重连跳过正版验证，以正版 UUID 进入并用密码登录
                         dataService.markPremiumFallbackConfirmed(s.ip(), s.username());
@@ -213,7 +215,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                 cleanupSession(channel);
                 channel.close();
             }
-        }, plugin.getConfigManager().premiumHandshakeTimeoutMs(), TimeUnit.MILLISECONDS));
+        }, config.premiumHandshakeTimeoutMs(), TimeUnit.MILLISECONDS));
     }
 
     // ===== 阶段2-3：加密握手与启用 =====
