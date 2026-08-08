@@ -28,8 +28,9 @@ public final class AuthManager {
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
-    // 暴力破解防护：记录失败次数和踢出到期时间
-    private final Map<UUID, Integer> failedAttempts = new ConcurrentHashMap<>();
+    // 暴力破解防护：记录失败次数[0]/最后失败时间[1]和踢出到期时间
+    // failedAttempts 跨连接保留，超过 reset-seconds 未再失败则过期清空
+    private final Map<UUID, long[]> failedAttempts = new ConcurrentHashMap<>();
     private final Map<UUID, Long> kickUntil = new ConcurrentHashMap<>();
     // 标记待删除原版数据的玩家（unregister 后等待 PlayerQuitEvent 触发时删除 .dat）
     private final Set<UUID> pendingDatDelete = ConcurrentHashMap.newKeySet();
@@ -47,6 +48,9 @@ public final class AuthManager {
     private final boolean newWorldStructure;
     // 注销后拒绝重连时长（毫秒）
     private static final long UNREGISTER_RECONNECT_DELAY = 5000L;
+    // failedAttempts 容量阈值：超过时清理未达阈值的失败计数，防止攻击者用大量用户名
+    // 各失败未达阈值导致 Map 无界增长（失败计数跨连接保留后不再随退出清理）
+    private static final int FAILED_ATTEMPTS_CAP = 1000;
 
     public AuthManager(HTLogin plugin, PlayerDataManager dataManager, ConfigManager configManager) {
         this.plugin = plugin;
@@ -166,10 +170,32 @@ public final class AuthManager {
 
         // 登录失败，增加计数（仅在启用失败保护时）
         if (configManager.failProtectionEnabled()) {
-            int attempts = failedAttempts.merge(uuid, 1, Integer::sum);
-            if (attempts >= configManager.failMaxAttempts()) {
+            long now = System.currentTimeMillis();
+            long resetMs = configManager.failProtectionResetSeconds() * 1000L;
+            // 容量守卫 + 过期清理：失败计数跨连接保留后不再随退出清理，攻击者可用大量用户名
+            // 各失败未达阈值使 Map 无界增长，超限时清理未达阈值或已过期的条目
+            if (failedAttempts.size() > FAILED_ATTEMPTS_CAP) {
+                failedAttempts.entrySet().removeIf(e -> {
+                    long[] v = e.getValue();
+                    return v[0] < configManager.failMaxAttempts()
+                            || (resetMs > 0 && now - v[1] >= resetMs);
+                });
+            }
+            // 原子计数：距上次失败超过过期时长则重置为 1，否则累加（跨连接保留）
+            int[] attempts = new int[1];
+            failedAttempts.compute(uuid, (k, v) -> {
+                if (v == null || (resetMs > 0 && now - v[1] >= resetMs)) {
+                    attempts[0] = 1;
+                    return new long[]{1, now};
+                }
+                v[0]++;
+                v[1] = now;
+                attempts[0] = (int) v[0];
+                return v;
+            });
+            if (attempts[0] >= configManager.failMaxAttempts()) {
                 // 达到阈值，设置踢出期
-                kickUntil.put(uuid, System.currentTimeMillis() + configManager.failKickDuration() * 1000L);
+                kickUntil.put(uuid, now + configManager.failKickDuration() * 1000L);
                 failedAttempts.remove(uuid);
             }
         }
@@ -469,9 +495,11 @@ public final class AuthManager {
         invulnerablePending.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
-        // 清理失败计数和踢出记录（玩家已离线，保留无意义）
-        failedAttempts.remove(uuid);
-        kickUntil.remove(uuid);
+        // 注意：不清除失败计数与踢出记录（failedAttempts / kickUntil）。
+        // 玩家被踢出或退出会触发 PlayerQuitEvent → 本方法；若在此清除，
+        // 攻击者可通过"失败1-2次→重连"重置连续失败计数、或借被踢重连绕过踢出期，
+        // 使 fail-protection 的连续失败阈值与踢出期保护失效。
+        // 两者均为跨连接的暴力破解防护，须保留至达到阈值/登录成功/到期，由对应逻辑清理。
     }
 
     // Status checks
@@ -516,7 +544,13 @@ public final class AuthManager {
     public boolean isKicked(UUID uuid) {
         if (!configManager.failProtectionEnabled()) return false;
         Long until = kickUntil.get(uuid);
-        return until != null && until > System.currentTimeMillis();
+        if (until == null) return false;
+        if (until <= System.currentTimeMillis()) {
+            // 懒清理已过期的踢出记录（踢出记录不再随 clearSession 清理，需在此避免无界累积）
+            kickUntil.remove(uuid);
+            return false;
+        }
+        return true;
     }
 
     // 获取剩余踢出时间（秒）
@@ -534,9 +568,14 @@ public final class AuthManager {
     /** 清理已过期的踢出记录、失败计数和注销拒绝重连记录（由周期任务每分钟调用，reload 时也会调用） */
     public void cleanupExpiredStates() {
         long now = System.currentTimeMillis();
+        long resetMs = configManager.failProtectionResetSeconds() * 1000L;
         kickUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
-        // 失败计数未达阈值的条目也应清理（玩家可能已离线）
-        failedAttempts.entrySet().removeIf(entry -> entry.getValue() < configManager.failMaxAttempts());
+        // 清理未达阈值的失败计数，以及超过过期时长未再失败的计数（玩家可能已离线/已放弃尝试）
+        failedAttempts.entrySet().removeIf(entry -> {
+            long[] v = entry.getValue();
+            return v[0] < configManager.failMaxAttempts()
+                    || (resetMs > 0 && now - v[1] >= resetMs);
+        });
         // 清理已过期的注销拒绝重连记录
         recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
     }

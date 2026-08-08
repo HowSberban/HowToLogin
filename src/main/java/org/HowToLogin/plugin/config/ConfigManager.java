@@ -35,6 +35,8 @@ public final class ConfigManager {
     private boolean failProtectionEnabled;
     private int failMaxAttempts;
     private int failKickDuration;
+    // 失败计数跨连接保留的过期时间（秒）：玩家最后一次失败超过此时长未再失败则清空计数，0 = 永不过期
+    private int failProtectionResetSeconds;
     private boolean ipAutoLoginEnabled;
     private int ipAutoLoginExpireMinutes;
     private int loginRemindInterval;
@@ -143,8 +145,13 @@ public final class ConfigManager {
 
         // 数据库设置
         this.databaseType = config.getString("database.type", "sqlite").toLowerCase(Locale.ROOT);
+        // 数据库类型校验：仅支持 sqlite/mysql，非法值回退为 sqlite
+        if (!"sqlite".equals(this.databaseType) && !"mysql".equals(this.databaseType)) {
+            plugin.getLogger().warning(I18n.get("log.config_database_type_invalid", this.databaseType, "sqlite"));
+            this.databaseType = "sqlite";
+        }
         this.mysqlHost = config.getString("database.mysql.host", "localhost");
-        this.mysqlPort = config.getInt("database.mysql.port", 3306);
+        this.mysqlPort = clampInt("database.mysql.port", config.getInt("database.mysql.port", 3306), 1);
         this.mysqlDatabase = config.getString("database.mysql.database", "htlogin");
         this.mysqlUsername = config.getString("database.mysql.username", "root");
         this.mysqlPassword = config.getString("database.mysql.password", "");
@@ -156,20 +163,21 @@ public final class ConfigManager {
                 this.mysqlParams.put(key, config.getString("database.mysql.params." + key, ""));
             }
         }
-        this.poolSize = config.getInt("database.mysql.pool-size", 10);
+        this.poolSize = clampInt("database.mysql.pool-size", config.getInt("database.mysql.pool-size", 10), 1);
         // 记录数据库配置指纹，用于 reload 时检测是否需要重启
         this.databaseFingerprint = databaseType + "|" + mysqlHost + "|" + mysqlPort
                 + "|" + mysqlDatabase + "|" + mysqlUsername + "|" + mysqlPassword + "|" + poolSize;
 
         // 登录设置
-        this.loginTimeout = config.getInt("login.timeout", 60);
+        this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 60), 0);
         this.kickOnTimeout = config.getBoolean("login.kick-on-timeout", true);
         this.failProtectionEnabled = config.getBoolean("login.fail-protection.enabled", true);
-        this.failMaxAttempts = config.getInt("login.fail-protection.max-attempts", 3);
-        this.failKickDuration = config.getInt("login.fail-protection.kick-duration", 60);
+        this.failMaxAttempts = clampInt("login.fail-protection.max-attempts", config.getInt("login.fail-protection.max-attempts", 3), 1);
+        this.failKickDuration = clampInt("login.fail-protection.kick-duration", config.getInt("login.fail-protection.kick-duration", 60), 0);
+        this.failProtectionResetSeconds = clampInt("login.fail-protection.reset-seconds", config.getInt("login.fail-protection.reset-seconds", 300), 0);
         this.ipAutoLoginEnabled = config.getBoolean("login.ip-auto-login.enabled", true);
-        this.ipAutoLoginExpireMinutes = config.getInt("login.ip-auto-login.expire-minutes", 720);
-        this.loginRemindInterval = config.getInt("login.remind-interval", 5);
+        this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 720), 0);
+        this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
 
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
@@ -190,6 +198,11 @@ public final class ConfigManager {
             this.maxPasswordLength = this.minPasswordLength;
         }
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
+        // 哈希算法校验：仅支持 bcrypt/sha256，非法值回退为 bcrypt（避免静默降级为 sha256）
+        if (!"bcrypt".equals(this.passwordHashAlgorithm) && !"sha256".equals(this.passwordHashAlgorithm)) {
+            plugin.getLogger().warning(I18n.get("log.config_hash_invalid", this.passwordHashAlgorithm, "bcrypt"));
+            this.passwordHashAlgorithm = "bcrypt";
+        }
         // 密码字符规则：正则表达式，为空表示不限制
         String patternStr = config.getString("password.pattern", "");
         if (patternStr.isBlank()) {
@@ -204,7 +217,7 @@ public final class ConfigManager {
         }
 
         // 注册限制
-        this.maxAccountsPerIp = config.getInt("register.max-accounts-per-ip", 0);
+        this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip", config.getInt("register.max-accounts-per-ip", 0), 0);
 
         // 行为限制
         this.preventMove = config.getBoolean("prevent.move", true);
@@ -224,7 +237,12 @@ public final class ConfigManager {
         // 登录前保护
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
         this.protectionPosMode = config.getString("protection.pos.mode", "random");
-        this.protectionPosSpawnRadius = config.getInt("protection.pos.spawn-radius", 10);
+        // 坐标模式校验：仅支持 random/fixed，非法值回退为 random
+        if (!"random".equals(this.protectionPosMode) && !"fixed".equals(this.protectionPosMode)) {
+            plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "protection.pos.mode", this.protectionPosMode, "random"));
+            this.protectionPosMode = "random";
+        }
+        this.protectionPosSpawnRadius = clampInt("protection.pos.spawn-radius", config.getInt("protection.pos.spawn-radius", 10), 1);
         this.protectionPosFixedX = config.getDouble("protection.pos.fixed.x", 0);
         this.protectionPosFixedY = config.getDouble("protection.pos.fixed.y", 64);
         this.protectionPosFixedZ = config.getDouble("protection.pos.fixed.z", 0);
@@ -235,14 +253,14 @@ public final class ConfigManager {
 
         // 正版验证
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
-        this.premiumTimeoutSeconds = config.getInt("premium.timeout-seconds", 10);
-        this.premiumCrackerCacheSeconds = config.getInt("premium.cracker-cache-seconds", 120);
-        this.premiumHandshakeTimeoutMs = config.getInt("premium.handshake-timeout-ms", 30000);
-        this.premiumInitialDelayMs = config.getInt("premium.initial-delay-ms", 1000);
-        this.premiumMaxRetries = config.getInt("premium.max-retries", 2);
-        this.premiumRetryBackoffBaseMs = config.getLong("premium.retry-backoff-base-ms", 5000);
-        this.premiumHttpPoolSize = config.getInt("premium.http-pool-size", 2);
-        this.premiumCacheCap = config.getInt("premium.cache-cap", 1000);
+        this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 10), 1);
+        this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);
+        this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
+        this.premiumInitialDelayMs = clampInt("premium.initial-delay-ms", config.getInt("premium.initial-delay-ms", 1000), 0);
+        this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
+        this.premiumRetryBackoffBaseMs = clampLong("premium.retry-backoff-base-ms", config.getLong("premium.retry-backoff-base-ms", 5000), 0);
+        this.premiumHttpPoolSize = clampInt("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2);
+        this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
 
@@ -275,6 +293,24 @@ public final class ConfigManager {
         return base;
     }
 
+    /** 整型配置校验：低于下限时调整为下限并告警，避免非法值导致运行时异常 */
+    private int clampInt(String key, int value, int min) {
+        if (value < min) {
+            plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
+            return min;
+        }
+        return value;
+    }
+
+    /** 长整型配置校验：低于下限时调整为下限并告警 */
+    private long clampLong(String key, long value, long min) {
+        if (value < min) {
+            plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
+            return min;
+        }
+        return value;
+    }
+
     // 数据库设置
     public String databaseType() { return databaseType; }
     public String mysqlHost() { return mysqlHost; }
@@ -291,6 +327,7 @@ public final class ConfigManager {
     public boolean failProtectionEnabled() { return failProtectionEnabled; }
     public int failMaxAttempts() { return failMaxAttempts; }
     public int failKickDuration() { return failKickDuration; }
+    public int failProtectionResetSeconds() { return failProtectionResetSeconds; }
     public boolean ipAutoLoginEnabled() { return ipAutoLoginEnabled; }
     public int ipAutoLoginExpireMinutes() { return ipAutoLoginExpireMinutes; }
     public int loginRemindInterval() { return loginRemindInterval; }
