@@ -151,7 +151,7 @@ public final class ConfigManager {
             this.databaseType = "sqlite";
         }
         this.mysqlHost = config.getString("database.mysql.host", "localhost");
-        this.mysqlPort = clampInt("database.mysql.port", config.getInt("database.mysql.port", 3306), 1);
+        this.mysqlPort = clampRange("database.mysql.port", config.getInt("database.mysql.port", 3306), 1, 65535);
         this.mysqlDatabase = config.getString("database.mysql.database", "htlogin");
         this.mysqlUsername = config.getString("database.mysql.username", "root");
         this.mysqlPassword = config.getString("database.mysql.password", "");
@@ -163,7 +163,7 @@ public final class ConfigManager {
                 this.mysqlParams.put(key, config.getString("database.mysql.params." + key, ""));
             }
         }
-        this.poolSize = clampInt("database.mysql.pool-size", config.getInt("database.mysql.pool-size", 10), 1);
+        this.poolSize = clampRange("database.mysql.pool-size", config.getInt("database.mysql.pool-size", 10), 1, 128);
         // 记录数据库配置指纹，用于 reload 时检测是否需要重启
         this.databaseFingerprint = databaseType + "|" + mysqlHost + "|" + mysqlPort
                 + "|" + mysqlDatabase + "|" + mysqlUsername + "|" + mysqlPassword + "|" + poolSize;
@@ -259,7 +259,7 @@ public final class ConfigManager {
         this.premiumInitialDelayMs = clampInt("premium.initial-delay-ms", config.getInt("premium.initial-delay-ms", 1000), 0);
         this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
         this.premiumRetryBackoffBaseMs = clampInt("premium.retry-backoff-base-ms", config.getInt("premium.retry-backoff-base-ms", 5000), 0);
-        this.premiumHttpPoolSize = clampInt("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2);
+        this.premiumHttpPoolSize = clampRange("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2, 64);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
@@ -298,6 +298,19 @@ public final class ConfigManager {
         if (value < min) {
             plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
             return min;
+        }
+        return value;
+    }
+
+    /** 整型配置校验：限定区间 [min, max]，越界时钳制到边界并告警（用于端口、线程池等有硬性上限的配置） */
+    private int clampRange(String key, int value, int min, int max) {
+        if (value < min) {
+            plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
+            return min;
+        }
+        if (value > max) {
+            plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, max));
+            return max;
         }
         return value;
     }

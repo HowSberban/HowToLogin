@@ -10,11 +10,12 @@ database:
   # MySQL 配置（仅 type=mysql 时生效）
   mysql:
     host: localhost
+    # 端口（有效范围 1-65535）
     port: 3306
     database: htlogin
     username: root
     password: ""
-    # 连接池大小
+    # 连接池大小（有效范围 1-128）
     pool-size: 10
     # 连接参数（键值对，拼接到 JDBC URL）
     params:
@@ -137,7 +138,7 @@ premium:
   max-retries: 2
   # 重试指数退避基数（毫秒），第 n 次重试等待 base * 2^n
   retry-backoff-base-ms: 5000
-  # Mojang hasJoined / 正版验证异步任务专用线程池大小
+  # Mojang hasJoined / 正版验证异步任务专用线程池大小（有效范围 2-64）
   # 请求含 sleep + 退避重试为阻塞式任务，高并发正版验证时可按负载调大
   http-pool-size: 2
   # 离线确认/正版回退缓存硬上限
