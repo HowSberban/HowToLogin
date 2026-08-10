@@ -25,6 +25,9 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
+    // 正版验证组件（仅 PacketEvents 前置时创建）
+    private MojangClient mojangClient;
+    private PlayerInjector playerInjector;
 
     @Override
     public void onEnable() {
@@ -61,6 +64,9 @@ public final class HTLogin extends JavaPlugin {
             playerDataManager.saveSync();
             playerDataManager.close();
         }
+        // 关闭正版验证线程池（daemon 线程 JVM 会终止，但规范上应显式关闭）
+        if (mojangClient != null) mojangClient.close();
+        if (playerInjector != null) playerInjector.close();
         // Paper 1.20+ 统一调度器 API，兼容 Folia
         Bukkit.getGlobalRegionScheduler().cancelTasks(this);
         Bukkit.getAsyncScheduler().cancelTasks(this);
@@ -138,14 +144,13 @@ public final class HTLogin extends JavaPlugin {
         }
         try {
             DataService dataService = new DataService(playerDataManager, configManager);
-            MojangClient mojangClient = new MojangClient(this);
-
-            PlayerInjector playerInjector = new PlayerInjector(this);
+            this.mojangClient = new MojangClient(this);
+            this.playerInjector = new PlayerInjector(this);
 
             Class<?> handlerClass = Class.forName("org.howtologin.plugin.premium.ConnectionHandler");
             Object handler = handlerClass
                     .getConstructor(HTLogin.class, DataService.class, MojangClient.class, PlayerInjector.class, AuthManager.class)
-                    .newInstance(this, dataService, mojangClient, playerInjector, authManager);
+                    .newInstance(this, dataService, this.mojangClient, this.playerInjector, authManager);
 
             registerPacketEventsListener(handler);
         } catch (Exception e) {

@@ -312,9 +312,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                                 dataService.savePremium(uuid, username, session.ip(), properties));
                     }
 
-                    // 清除上次可能残留的正版回退标记（本次验证成功，应自动免密）
-                    // 同时清除 ip+名 回退标记，确保下次优先走正常正版验证
-                    authManager.clearPremiumFallback(uuid);
+                    // 清除 ip+名 回退标记，确保下次优先走正常正版验证
                     dataService.clearPremiumFallbackConfirmed(session.ip(), session.username());
 
                     // 13. 进入游戏（异步触发 AsyncPlayerPreLoginEvent + 推进 state）

@@ -157,11 +157,7 @@ public final class AuthManager {
             }
             dataManager.save(uuid);
 
-            loggedIn.add(uuid);
-            pendingLogin.remove(uuid);
-            // 登录成功，清零失败计数
-            failedAttempts.remove(uuid);
-            kickUntil.remove(uuid);
+            markLoggedIn(uuid);
             // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
             clearPremiumFallback(uuid);
             onLoginSuccess(player);
@@ -234,10 +230,7 @@ public final class AuthManager {
     /** 强制登录玩家（不管有没有账号，仅对在线玩家生效） */
     public void forceLogin(Player player) {
         UUID uuid = player.getUniqueId();
-        loggedIn.add(uuid);
-        pendingLogin.remove(uuid);
-        failedAttempts.remove(uuid);
-        kickUntil.remove(uuid);
+        markLoggedIn(uuid);
         onLoginSuccess(player);
     }
 
@@ -272,10 +265,7 @@ public final class AuthManager {
         if (data == null) return;
         data.lastLogin(System.currentTimeMillis() / 1000);
         dataManager.save(uuid);
-        loggedIn.add(uuid);
-        pendingLogin.remove(uuid);
-        failedAttempts.remove(uuid);
-        kickUntil.remove(uuid);
+        markLoggedIn(uuid);
         onLoginSuccess(player);
     }
 
@@ -484,6 +474,14 @@ public final class AuthManager {
         File file = new File(dir, uuid + ext);
         if (!file.exists()) return true;
         return file.delete();
+    }
+
+    /** 标记玩家为已登录：清理待登录、失败计数、踢出记录 */
+    private void markLoggedIn(UUID uuid) {
+        loggedIn.add(uuid);
+        pendingLogin.remove(uuid);
+        failedAttempts.remove(uuid);
+        kickUntil.remove(uuid);
     }
 
     // 玩家退出时调用 — 清理会话状态
@@ -714,10 +712,7 @@ public final class AuthManager {
             }
             dataManager.save(uuid);
         }
-        loggedIn.add(uuid);
-        pendingLogin.remove(uuid);
-        failedAttempts.remove(uuid);
-        kickUntil.remove(uuid);
+        markLoggedIn(uuid);
         onLoginSuccess(player);
     }
 

@@ -57,6 +57,11 @@ public final class MojangClient {
         });
     }
 
+    /** 关闭线程池（插件禁用时调用） */
+    public void close() {
+        httpExecutor.shutdown();
+    }
+
     /**
      * 异步向 Mojang 会话服务器发起 hasJoined 验证。
      * 遇 204/429/502/503/504 等可重试结果时按配置（premium.max-retries / retry-backoff-base-ms）

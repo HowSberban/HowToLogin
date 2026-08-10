@@ -115,7 +115,7 @@ public final class DataService {
      */
     public void markPremiumFallbackConfirmed(String ip, String name) {
         premiumFallbackConfirmed.put(cacheKey(ip, name),
-                System.currentTimeMillis() + configManager.premiumCrackerCacheSeconds() * 1000L);
+                System.currentTimeMillis() + configManager.premiumFallbackCacheSeconds() * 1000L);
         enforceCap(premiumFallbackConfirmed);
     }
 

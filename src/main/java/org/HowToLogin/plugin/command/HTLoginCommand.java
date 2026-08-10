@@ -46,7 +46,12 @@ public final class HTLoginCommand {
 
     public HTLoginCommand(HTLogin plugin) {
         this.plugin = plugin;
-        this.SUGGEST_ALL_PLAYERS = (context, builder) -> {
+        this.SUGGEST_ALL_PLAYERS = suggestAllPlayers(plugin);
+    }
+
+    /** 补全：在线玩家 + 已注册的离线玩家（大小写不敏感前缀匹配） */
+    public static SuggestionProvider<io.papermc.paper.command.brigadier.CommandSourceStack> suggestAllPlayers(HTLogin plugin) {
+        return (context, builder) -> {
             String remaining = builder.getRemaining().toLowerCase(Locale.ROOT);
             // 先添加在线玩家
             for (Player player : Bukkit.getOnlinePlayers()) {
@@ -56,7 +61,7 @@ public final class HTLoginCommand {
                 }
             }
             // 再添加已注册的离线玩家
-            for (UUID uuid : this.plugin.getPlayerDataManager().getAllUuids()) {
+            for (UUID uuid : plugin.getPlayerDataManager().getAllUuids()) {
                 if (Bukkit.getPlayer(uuid) != null) continue;
                 OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
                 String name = offline.getName();

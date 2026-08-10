@@ -132,7 +132,7 @@ premium:
   # 加密握手阶段等待 EncryptionResponse 的超时（毫秒）
   # 防止恶意客户端收到 EncryptionRequest 后既不回传也不断开，导致会话滞留内存
   handshake-timeout-ms: 30000
-  # hasJoined 首次调用前等待（毫秒），确保客户端已 join Mojang sessionserver
+  # hasJoined 首次调用前等待（毫秒）
   initial-delay-ms: 1000
   # hasJoined 可重试状态码的最大重试次数（不含首次尝试）
   max-retries: 2
@@ -153,3 +153,6 @@ premium:
   # 注意：此功能绕过正版验证，安全不可保证！
   fallback:
     enabled: false
+    # 回退标记有效期（秒）：正版验证失败后，该 IP+名 在此期间重连直接走回退路径（跳过加密握手）
+    # 过期后重连将重新尝试正版验证（有效范围 ≥ 30）
+    cache-seconds: 300

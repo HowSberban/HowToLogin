@@ -92,6 +92,8 @@ public final class ConfigManager {
     private boolean premiumUpgradeEnabled;
     // 正版验证失败时允许正版玩家以密码登录（默认关闭，不安全）
     private boolean premiumPasswordFallbackEnabled;
+    // 回退标记有效期（秒），过期后重连重新尝试正版验证
+    private int premiumFallbackCacheSeconds;
 
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -263,6 +265,7 @@ public final class ConfigManager {
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
+        this.premiumFallbackCacheSeconds = clampInt("premium.fallback.cache-seconds", config.getInt("premium.fallback.cache-seconds", 300), 30);
 
         // 默认语言（控制台日志和客户端语言无匹配文件时使用）
         String defaultLanguage = config.getString("settings.default-language", "zh_CN");
@@ -380,5 +383,6 @@ public final class ConfigManager {
     public int premiumCacheCap() { return premiumCacheCap; }
     public boolean premiumUpgradeEnabled() { return premiumUpgradeEnabled; }
     public boolean premiumPasswordFallbackEnabled() { return premiumPasswordFallbackEnabled; }
+    public int premiumFallbackCacheSeconds() { return premiumFallbackCacheSeconds; }
 
 }

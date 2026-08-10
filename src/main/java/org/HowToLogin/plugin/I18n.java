@@ -34,9 +34,9 @@ public final class I18n {
 
     // volatile 保证可见性：loadAll 整体替换引用，读线程要么看到旧 map 要么看到新 map
     private static volatile Map<String, Properties> bundles = new ConcurrentHashMap<>();
-    private static String defaultLocale = "zh_CN";
-    private static boolean clientLanguageDetection = true;
-    private static Plugin plugin;
+    private static volatile String defaultLocale = "zh_CN";
+    private static volatile boolean clientLanguageDetection = true;
+    private static volatile Plugin plugin;
 
     private I18n() {}
 

@@ -55,6 +55,11 @@ public final class PlayerInjector {
         });
     }
 
+    /** 关闭线程池（插件禁用时调用） */
+    public void close() {
+        preLoginExecutor.shutdown();
+    }
+
     /**
      * 异步触发 AsyncPlayerPreLoginEvent，让其他插件（权限组/领地等）准备玩家数据。
      * 由于取消了 LoginStart，服务端不会自动触发此事件，需手动 callEvent。
