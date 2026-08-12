@@ -68,6 +68,10 @@ public final class ConfigManager {
     private double protectionPosFixedZ;
     private float protectionPosFixedYaw;
     private float protectionPosFixedPitch;
+    // 未登录旁观模式：未登录期间切换为旁观，登录后恢复上次游戏模式
+    private boolean protectionGamemodeEnabled;
+    // 背包保护：未登录期间通过 PacketEvents 拦截物品数据包，防止 mod 窥视
+    private boolean protectionInventoryEnabled;
 
     // 通用设置
     private boolean realUnreg;
@@ -251,6 +255,12 @@ public final class ConfigManager {
         this.protectionPosFixedYaw = (float) config.getDouble("protection.pos.fixed.yaw", 0);
         this.protectionPosFixedPitch = (float) config.getDouble("protection.pos.fixed.pitch", 0);
 
+        // 未登录旁观模式
+        this.protectionGamemodeEnabled = config.getBoolean("protection.gamemode.enabled", false);
+
+        // 背包保护（PacketEvents 数据包拦截）
+        this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", false);
+
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
 
         // 正版验证
@@ -367,6 +377,12 @@ public final class ConfigManager {
     public double protectionPosFixedZ() { return protectionPosFixedZ; }
     public float protectionPosFixedYaw() { return protectionPosFixedYaw; }
     public float protectionPosFixedPitch() { return protectionPosFixedPitch; }
+
+    // 未登录旁观模式
+    public boolean protectionGamemodeEnabled() { return protectionGamemodeEnabled; }
+
+    // 背包保护（PacketEvents 数据包拦截）
+    public boolean protectionInventoryEnabled() { return protectionInventoryEnabled; }
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }

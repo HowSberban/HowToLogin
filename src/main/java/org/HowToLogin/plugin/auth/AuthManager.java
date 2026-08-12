@@ -2,6 +2,10 @@ package org.howtologin.plugin.auth;
 
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
+import org.howtologin.plugin.api.event.HTLoginLoginEvent;
+import org.howtologin.plugin.api.event.HTLoginLogoutEvent;
+import org.howtologin.plugin.api.event.HTLoginRegisterEvent;
+import org.howtologin.plugin.api.event.HTLoginUnregisterEvent;
 import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
@@ -28,6 +32,9 @@ public final class AuthManager {
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
+    // 标记当前会话被设为旁观的玩家：onLoginSuccess 仅对这些玩家恢复游戏模式，
+    // 避免对免密登录（IP/正版）的玩家做不必要的 setGameMode
+    private final Set<UUID> spectatorPending = ConcurrentHashMap.newKeySet();
     // 暴力破解防护：记录失败次数[0]/最后失败时间[1]和踢出到期时间
     // failedAttempts 跨连接保留，超过 reset-seconds 未再失败则过期清空
     private final Map<UUID, long[]> failedAttempts = new ConcurrentHashMap<>();
@@ -112,6 +119,7 @@ public final class AuthManager {
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
         onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, player));
         return true;
     }
 
@@ -129,6 +137,7 @@ public final class AuthManager {
             ip = online.getAddress().getAddress().getHostAddress();
         }
         dataManager.createPlayer(uuid, hash, ip);
+        Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, online));
         return true;
     }
 
@@ -161,6 +170,7 @@ public final class AuthManager {
             // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
             clearPremiumFallback(uuid);
             onLoginSuccess(player);
+            Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
             return true;
         }
 
@@ -210,6 +220,7 @@ public final class AuthManager {
             data.lastLogin(0);
             dataManager.save(uuid);
         }
+        Bukkit.getPluginManager().callEvent(new HTLoginLogoutEvent(uuid, Bukkit.getPlayer(uuid)));
         return true;
     }
 
@@ -232,6 +243,7 @@ public final class AuthManager {
         UUID uuid = player.getUniqueId();
         markLoggedIn(uuid);
         onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
     }
 
     // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
@@ -267,6 +279,7 @@ public final class AuthManager {
         dataManager.save(uuid);
         markLoggedIn(uuid);
         onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
     }
 
     // Logout
@@ -280,6 +293,7 @@ public final class AuthManager {
             data.lastLogin(0);
             dataManager.save(uuid);
         }
+        Bukkit.getPluginManager().callEvent(new HTLoginLogoutEvent(uuid, player));
     }
 
     // Change password
@@ -306,6 +320,7 @@ public final class AuthManager {
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
+        spectatorPending.remove(uuid);
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
             // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
@@ -320,6 +335,7 @@ public final class AuthManager {
             // 顺手清理已过期的踢出记录、失败计数和注销拒绝重连记录，防止批量注销时累积
             cleanupExpiredStates();
         }
+        Bukkit.getPluginManager().callEvent(new HTLoginUnregisterEvent(uuid, Bukkit.getPlayer(uuid)));
         return true;
     }
 
@@ -491,6 +507,8 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         // 清除传送过渡期标记，防止下次登录时错误无敌
         invulnerablePending.remove(uuid);
+        // 清除旁观标记（未登录退出时防止下次登录误恢复游戏模式）
+        spectatorPending.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
         // 注意：不清除失败计数与踢出记录（failedAttempts / kickUntil）。
@@ -581,43 +599,27 @@ public final class AuthManager {
     // ===== 坐标保护相关 =====
 
     /**
-     * 判断位置是否悬空（下方无固体方块支撑）。
-     * 此方法会阻塞等待区块加载，应在异步线程中调用（如 AsyncPlayerSpawnLocationEvent）。
-     */
-    public boolean isLocationFloating(Location loc) {
-        World world = loc.getWorld();
-        if (world == null) return false;
-        int x = loc.getBlockX();
-        int z = loc.getBlockZ();
-        int y = loc.getBlockY();
-        if (y - 1 < world.getMinHeight()) return true;
-        int blockX = x & 15;
-        int blockZ = z & 15;
-        org.bukkit.Chunk chunk = world.getChunkAtAsyncUrgently(x >> 4, z >> 4).join();
-        org.bukkit.ChunkSnapshot snapshot = chunk.getChunkSnapshot();
-        return !snapshot.getBlockData(blockX, y - 1, blockZ).getMaterial().isSolid();
-    }
-
-    /**
-     * 保存玩家当前退出位置（仅已登录玩家退出时调用）。
-     * 未登录玩家退出不会更新位置，保持上次保存的位置不变。
+     * 保存玩家当前退出位置和游戏模式（仅已登录玩家退出时调用）。
+     * 未登录玩家退出不会更新位置和游戏模式，保持上次保存的值不变。
      */
     public void saveLogoutLocation(Player player) {
         PlayerData data = dataManager.getPlayer(player.getUniqueId());
         if (data != null) {
             data.logoutLocation(PlayerDataManager.serializeLocation(player.getLocation()));
+            data.gameMode(player.getGameMode().name());
             dataManager.save(player.getUniqueId());
         }
     }
 
     /**
-     * 仅更新内存缓存中的退出位置，不落库。
+     * 仅更新内存缓存中的退出位置和游戏模式，不落库。
      * 用于 onDisable：插件禁用后无法注册异步任务，改为更新缓存后由 saveSync 统一落库。
      */
     public void updateLogoutLocationCache(Player player) {
         PlayerData data = dataManager.getPlayer(player.getUniqueId());
         if (data != null) {
             data.logoutLocation(PlayerDataManager.serializeLocation(player.getLocation()));
+            data.gameMode(player.getGameMode().name());
         }
     }
 
@@ -714,6 +716,7 @@ public final class AuthManager {
         }
         markLoggedIn(uuid);
         onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
     }
 
     /**
@@ -784,13 +787,58 @@ public final class AuthManager {
     }
 
     /**
-     * 登录/注册成功后的物品状态恢复：
-     * 未登录期间数据包监听器清空了该玩家的背包和装备（仅本人视角，他人不受影响）。
-     * 登录后调用 updateInventory 让服务器重发真实背包内容（含装备槽）。
+     * 未登录期间切换为旁观模式。
+     * 标记玩家为 spectatorPending，onLoginSuccess 时据此恢复游戏模式。
      * <p>
-     * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（updateInventory 非线程安全）。
+     * 当 gamemode.enabled=false 时，若坐标保护未开启且退出位置悬空，仍强制切换为旁观模式：
+     * 坐标保护未开启时玩家在退出位置生成，悬空位置会导致坠落暴露位置。
+     * 此时退出位置区块已加载（玩家刚在此生成），可安全进行同步方块检查。
+     * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（setGameMode 非线程安全）。
+     */
+    public void setSpectator(Player player) {
+        if (!configManager.protectionGamemodeEnabled()) {
+            // 旁观模式未开启时，仅在坐标保护未开启且退出位置悬空时仍切换为旁观
+            if (configManager.protectionPosEnabled()) return;
+            Location logoutLoc = getLogoutLocation(player);
+            if (logoutLoc == null || logoutLoc.getWorld() == null) return;
+            var below = logoutLoc.getWorld().getBlockAt(
+                    logoutLoc.getBlockX(), logoutLoc.getBlockY() - 1, logoutLoc.getBlockZ());
+            if (below.getType().isSolid()) return;
+        }
+        spectatorPending.add(player.getUniqueId());
+        player.getScheduler().run(plugin, task -> player.setGameMode(org.bukkit.GameMode.SPECTATOR), null);
+    }
+
+    /**
+     * 登录/注册成功后的状态恢复：
+     * 1. 恢复游戏模式：仅对被设为旁观的玩家恢复，有保存的游戏模式则恢复，否则使用服务器默认游戏模式（新玩家）
+     * 2. 物品状态恢复：未登录期间数据包监听器清空了该玩家的背包和装备（仅本人视角，他人不受影响），
+     *    登录后调用 updateInventory 让服务器重发真实背包内容（含装备槽）。
+     * <p>
+     * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（非线程安全操作）。
      */
     public void onLoginSuccess(Player player) {
-        player.getScheduler().run(plugin, task -> player.updateInventory(), null);
+        player.getScheduler().run(plugin, task -> {
+            // 仅对被设为旁观的玩家恢复游戏模式
+            if (spectatorPending.remove(player.getUniqueId())) {
+                PlayerData data = dataManager.getPlayer(player.getUniqueId());
+                // 默认使用服务器默认游戏模式（server.properties 中的 level-default-gamemode）
+                org.bukkit.GameMode mode = org.bukkit.Bukkit.getDefaultGameMode();
+                if (data != null && data.gameMode() != null) {
+                    try {
+                        mode = org.bukkit.GameMode.valueOf(data.gameMode());
+                    } catch (IllegalArgumentException ignored) {
+                        // 存储的游戏模式无效，使用服务器默认值
+                    }
+                }
+                player.setGameMode(mode);
+                // 新玩家首次注册时保存默认游戏模式，下次登录可恢复
+                if (data != null && data.gameMode() == null) {
+                    data.gameMode(mode.name());
+                    dataManager.save(player.getUniqueId());
+                }
+            }
+            player.updateInventory();
+        }, null);
     }
 }

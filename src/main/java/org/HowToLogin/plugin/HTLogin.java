@@ -3,6 +3,7 @@ package org.howtologin.plugin;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import org.howtologin.plugin.api.HTLoginApi;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.command.*;
 import org.howtologin.plugin.config.ConfigManager;
@@ -44,11 +45,17 @@ public final class HTLogin extends JavaPlugin {
         registerPremiumListener();
         rePendOnlinePlayers();
 
+        // 初始化 API 单例：必须在 AuthManager/PlayerDataManager 初始化完成后，
+        // 且在 rePendOnlinePlayers 之后（后者可能触发登录流程，API 此时已可用）
+        HTLoginApi.initialize(this, authManager, playerDataManager);
+
         getLogger().info(I18n.get("plugin.enabled", getPluginMeta().getVersion()));
     }
 
     @Override
     public void onDisable() {
+        // 先清理 API 单例：后续将关闭 dataManager，避免第三方插件在关服过程中读到失效实例
+        HTLoginApi.shutdown();
         // 关服前保存所有在线已登录玩家的当前位置
         // stop 关服时 PlayerQuitEvent 可能不触发或时序不确定，显式保存确保位置不丢失
         // 用 updateLogoutLocationCache 只更新内存缓存，由后续 saveSync 统一落库
@@ -103,12 +110,12 @@ public final class HTLogin extends JavaPlugin {
     /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包，需要 PacketEvents 前置） */
     private void registerPacketListener() {
         if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            if (configManager.preventInventory()) {
+            if (configManager.protectionInventoryEnabled()) {
                 getLogger().warning(I18n.get("log.packetevents_missing"));
             }
             return;
         }
-        // 始终注册监听器，是否拦截由 InventoryPacketListener 按 prevent.inventory 实时判断，
+        // 始终注册监听器，是否拦截由 InventoryPacketListener 按 protection.inventory.enabled 实时判断，
         // 使配置热重载（/htlogin reload）能即时开关背包保护而不必重启
         // 反射加载：InventoryPacketListener 继承 PacketEvents 类，
         // 若直接 import 会在插件加载阶段触发 PacketEvents 类解析失败
@@ -208,6 +215,7 @@ public final class HTLogin extends JavaPlugin {
             } else {
                 player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
             }
+            authManager.setSpectator(player);
             playerListener.scheduleLoginTimeout(player);
             playerListener.scheduleReminder(player, authManager.hasAccount(player));
         }

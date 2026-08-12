@@ -50,7 +50,7 @@ public final class InventoryPacketListener extends PacketListenerAbstract {
     @SuppressWarnings("IfCanBeSwitch")
     @Override
     public void onPacketSend(@NonNull PacketSendEvent event) {
-        if (!configManager.preventInventory()) return;
+        if (!configManager.protectionInventoryEnabled()) return;
 
         UUID receiverId = event.getUser().getUUID();
 

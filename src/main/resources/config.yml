@@ -106,6 +106,15 @@ protection:
       z: 0
       yaw: 0
       pitch: 0
+  # 未登录旁观模式：未登录期间切换为旁观模式，登录后恢复上次游戏模式
+  # 第一次注册的玩家切换为服务器默认游戏模式（server.properties 中的 level-default-gamemode）
+  # 当玩家上次退出保存的位置为悬空的位置，且坐标保护未开启时，无论该功能是否开启，都切换为旁观模式
+  gamemode:
+    enabled: false
+  # 背包保护：未登录玩家无法查看自己的背包
+  # 需要前置插件 PacketEvents
+  inventory:
+    enabled: false
 
 # 通用设置
 settings:

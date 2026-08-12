@@ -77,6 +77,7 @@ public final class PlayerListener implements Listener {
             // 正版验证失败回退进入的玩家：本次需密码登录，不自动免密
             if (authManager.isPremiumFallback(player.getUniqueId())) {
                 authManager.addPendingLogin(player);
+                authManager.setSpectator(player);
                 player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
                 scheduleLoginTimeout(player);
                 scheduleReminder(player, true);
@@ -108,10 +109,12 @@ public final class PlayerListener implements Listener {
                 return;
             }
             authManager.addPendingLogin(player);
+            authManager.setSpectator(player);
             player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
             scheduleLoginTimeout(player);
             scheduleReminder(player, true);
         } else {
+            authManager.setSpectator(player);
             player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
             scheduleLoginTimeout(player);
             scheduleReminder(player, false);
@@ -155,8 +158,6 @@ public final class PlayerListener implements Listener {
      * 在 JoinGamePacket 发送前调整老玩家 spawn 位置。
      * - IP 自动登录的玩家：直接在退出位置出生，避免后续传送。
      * - 启用坐标保护：强制主世界随机位置，防止坐标泄露（F3、小地图 mod 等）。
-     * - 未启用坐标保护：检查原位置是否悬空，悬空则改用随机出生点（与 pos 保护相同逻辑），
-     *   防止反作弊误踢，同时不修正到正下方地面（避免玩家利用逃避摔落伤害）。
      * 新玩家不干预，保留原版出生机制。
      * 此事件在 configuration phase 触发（异步线程），玩家尚未真正加入世界。
      */
@@ -178,17 +179,11 @@ public final class PlayerListener implements Listener {
             }
         }
 
+        // 启用坐标保护：强制主世界随机位置，防止坐标泄露
         if (plugin.getConfigManager().protectionPosEnabled()) {
-            // 启用坐标保护：强制主世界随机位置，防止坐标泄露
             org.bukkit.World world = org.bukkit.Bukkit.getWorlds().getFirst();
             Location safeSpawn = authManager.findSafeAuthSpawn(world);
             event.setSpawnLocation(safeSpawn);
-        } else {
-            // 未启用坐标保护：悬空时改用随机出生点，防止反作弊误踢
-            if (authManager.isLocationFloating(event.getSpawnLocation())) {
-                org.bukkit.World world = org.bukkit.Bukkit.getWorlds().getFirst();
-                event.setSpawnLocation(authManager.findSafeAuthSpawn(world));
-            }
         }
     }
 

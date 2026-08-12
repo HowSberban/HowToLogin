@@ -125,7 +125,7 @@ public final class HTLoginCommand {
         plugin.getAuthManager().cleanupExpiredStates();
         // 启用背包保护或正版验证但缺少 PacketEvents 前置时提醒
         if (org.bukkit.Bukkit.getPluginManager().getPlugin("packetevents") == null
-                && (plugin.getConfigManager().preventInventory()
+                && (plugin.getConfigManager().protectionInventoryEnabled()
                 || plugin.getConfigManager().premiumEnabled())) {
             plugin.getLogger().warning(I18n.get("log.packetevents_missing"));
         }
