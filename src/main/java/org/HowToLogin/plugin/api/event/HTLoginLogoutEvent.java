@@ -13,6 +13,7 @@ import java.util.UUID;
  * 在 /logout 或强制登出后触发。
  * 玩家离线时 getPlayer() 返回 null。
  */
+@SuppressWarnings("unused")
 public class HTLoginLogoutEvent extends Event {
 
     private static final HandlerList handlers = new HandlerList();

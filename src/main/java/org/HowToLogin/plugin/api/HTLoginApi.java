@@ -26,6 +26,7 @@ import java.util.UUID;
  * }
  * }</pre>
  */
+@SuppressWarnings("unused")
 public final class HTLoginApi {
 
     private static volatile HTLoginApi instance;

@@ -13,6 +13,7 @@ import java.util.UUID;
  * 在 /unregister 成功后触发。
  * 玩家离线时 getPlayer() 返回 null。
  */
+@SuppressWarnings("unused")
 public class HTLoginUnregisterEvent extends Event {
 
     private static final HandlerList handlers = new HandlerList();

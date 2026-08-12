@@ -13,6 +13,7 @@ import java.util.UUID;
  * 在 /register 或强制注册成功后触发。
  * 强制注册离线玩家时 getPlayer() 返回 null。
  */
+@SuppressWarnings("unused")
 public class HTLoginRegisterEvent extends Event {
 
     private static final HandlerList handlers = new HandlerList();
