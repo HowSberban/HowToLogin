@@ -47,7 +47,7 @@ public final class PlayerInjector {
 
     public PlayerInjector(HTLogin plugin) {
         this.plugin = plugin;
-        int poolSize = Math.max(1, plugin.getConfigManager().premiumHttpPoolSize());
+        int poolSize = plugin.getConfigManager().premiumHttpPoolSize();
         this.preLoginExecutor = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = new Thread(r, "HTLogin-PreLogin");
             t.setDaemon(true);

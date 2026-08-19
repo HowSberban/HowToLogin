@@ -43,22 +43,25 @@ public final class LoginCommand implements BasicCommand {
         // 踢出期检查：优先于密码验证
         if (authManager.isKicked(player)) {
             long remaining = authManager.getKickRemaining(player);
-            player.kick(HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
+            player.kick(HTLogin.legacy(I18n.get("login.kicked", remaining)));
             return;
         }
 
-        if (authManager.login(player, args[0])) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
-            // 登录成功后传送回上次退出位置（启用坐标保护时生效）
-            authManager.returnToLogoutLocation(player);
-        } else {
-            if (authManager.isKicked(player)) {
-                // 这次失败达到上限，触发踢出
-                long remaining = authManager.getKickRemaining(player);
-                player.kick(HTLogin.legacy(I18n.get("login.kicked", player, remaining)));
+        // 异步登录：bcrypt 校验在异步线程执行，回调回到玩家区域线程处理结果
+        authManager.loginAsync(player, args[0], (success, kickSeconds) -> {
+            if (success) {
+                player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
+                // 登录成功后传送回上次退出位置（启用坐标保护时生效）
+                authManager.returnToLogoutLocation(player);
             } else {
-                player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
+                if (authManager.isKicked(player)) {
+                    // 这次失败达到上限，触发踢出
+                    long remaining = authManager.getKickRemaining(player);
+                    player.kick(HTLogin.legacy(I18n.get("login.kicked", remaining)));
+                } else {
+                    player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
+                }
             }
-        }
+        });
     }
 }

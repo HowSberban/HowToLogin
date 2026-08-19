@@ -17,6 +17,8 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,8 +30,14 @@ public final class PlayerDataManager {
 
     private final HTLogin plugin;
     private final HikariDataSource dataSource;
-    // 内存缓存：启动时全量加载，运行时读操作走缓存，写操作异步落库
+    // 内存缓存：启动时全量加载，运行时读操作走缓存，写操作标记脏后由周期任务批量落库
     private final Map<UUID, PlayerData> players = new ConcurrentHashMap<>();
+    // 脏标记：内存数据已修改但尚未落库的玩家 UUID，由周期任务批量 flush
+    private final java.util.Set<UUID> dirty = ConcurrentHashMap.newKeySet();
+    // 批量落库失败重试计数：达到上限后放弃该玩家，防止数据库故障时无限重试刷日志
+    private final Map<UUID, Integer> flushFailures = new ConcurrentHashMap<>();
+    // 批量落库最大重试次数
+    private static final int MAX_FLUSH_RETRY = 3;
     // 正版玩家名索引：name(小写) → uuid，用于 getByName 快速查找，避免 O(n) 遍历
     private final Map<String, UUID> premiumNameIndex = new ConcurrentHashMap<>();
 
@@ -156,34 +164,56 @@ public final class PlayerDataManager {
         }
     }
 
-    /** 异步保存单个玩家数据（Folia 兼容，使用统一调度器） */
+    /** 标记玩家数据为脏：由周期任务批量落库（合并写、降 DB 开销；崩溃时最多丢失一个 flush 周期内的改动） */
     public void save(UUID uuid) {
-        PlayerData data = players.get(uuid);
-        if (data == null) return;
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> upsertSync(data));
-    }
-
-    /** 同步全量保存，用于 onDisable（必须在关服前完成） */
-    public void saveSync() {
-        saveAllSync();
-    }
-
-    private void upsertSync(PlayerData data) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(SQL_UPSERT)) {
-            bindPlayerData(ps, data);
-            ps.executeUpdate();
-        } catch (SQLException e) {
-            plugin.getLogger().severe(I18n.get("log.save_player_failed", data.uuid(), e.getMessage()));
+        if (players.containsKey(uuid)) {
+            dirty.add(uuid);
         }
     }
 
-    private void saveAllSync() {
-        if (players.isEmpty()) return;
+    /** 周期任务调用：将脏标记的玩家数据批量落库，失败按上限重试 */
+    public void flushDirty() {
+        if (dirty.isEmpty()) return;
+        final List<PlayerData> toSave = new ArrayList<>(dirty.size());
+        // 逐个移除而非整体 clear：避免与主线程并发 save() 竞态（clear 可能清掉刚标记的脏数据）
+        for (UUID uuid : dirty) {
+            dirty.remove(uuid);
+            PlayerData data = players.get(uuid);
+            if (data != null) toSave.add(data);
+        }
+        if (toSave.isEmpty()) return;
+
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            // 批量写失败时按重试上限重新标记脏，等待下轮 flush；成功则清除重试计数
+            if (upsertBatchSync(toSave)) {
+                for (PlayerData data : toSave) {
+                    flushFailures.remove(data.uuid());
+                }
+            } else {
+                for (PlayerData data : toSave) {
+                    int n = flushFailures.merge(data.uuid(), 1, Integer::sum);
+                    if (n < MAX_FLUSH_RETRY) {
+                        dirty.add(data.uuid());
+                    } else {
+                        flushFailures.remove(data.uuid()); // 放弃，停止重试
+                    }
+                }
+            }
+        });
+    }
+
+    /** 同步全量保存，用于 onDisable（必须在关服前完成，覆盖全部内存数据含脏标记） */
+    public void saveSync() {
+        dirty.clear();
+        saveAllSync();
+    }
+
+    /** 批量 upsert，整批一个事务；成功返回 true，失败返回 false */
+    private boolean upsertBatchSync(List<PlayerData> list) {
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
             try (PreparedStatement ps = conn.prepareStatement(SQL_UPSERT)) {
-                for (PlayerData data : players.values()) {
+                for (PlayerData data : list) {
                     bindPlayerData(ps, data);
                     ps.addBatch();
                 }
@@ -193,9 +223,16 @@ public final class PlayerDataManager {
                 conn.rollback();
                 throw e;
             }
+            return true;
         } catch (SQLException e) {
             plugin.getLogger().severe(I18n.get("log.save_all_failed", e.getMessage()));
+            return false;
         }
+    }
+
+    private void saveAllSync() {
+        if (players.isEmpty()) return;
+        upsertBatchSync(new ArrayList<>(players.values()));
     }
 
     private static void bindPlayerData(PreparedStatement ps, PlayerData data) throws SQLException {
@@ -219,11 +256,6 @@ public final class PlayerDataManager {
         return players.containsKey(uuid);
     }
 
-    /** 数据库中是否存在正版玩家（premium=1），用于缺少 PacketEvents 时提示账号丢失风险 */
-    public boolean hasPremiumPlayers() {
-        return !premiumNameIndex.isEmpty();
-    }
-
     public PlayerData getPlayer(UUID uuid) {
         return players.get(uuid);
     }
@@ -239,7 +271,18 @@ public final class PlayerDataManager {
     public void createPlayer(UUID uuid, String passwordHash, String ip) {
         PlayerData data = new PlayerData(uuid, null, passwordHash, ip, System.currentTimeMillis() / 1000, null, false, null, null);
         players.put(uuid, data);
-        save(uuid);
+        // 创建账号为关键操作：立即落库，避免崩溃丢新账号（区别于登录/退出等的周期批量 flush）
+        saveNow(data);
+    }
+
+    /** 立即同步落库单个玩家数据（用于注册等不可丢失的关键操作），失败时退化为脏标记由周期任务兜底重试 */
+    private void saveNow(PlayerData data) {
+        if (!upsertBatchSync(List.of(data))) {
+            // 立即写失败：转交周期 flush 兜底重试
+            dirty.add(data.uuid());
+        } else {
+            flushFailures.remove(data.uuid());
+        }
     }
 
     /**
@@ -263,7 +306,8 @@ public final class PlayerDataManager {
         if (name != null) {
             premiumNameIndex.put(name.toLowerCase(), uuid);
         }
-        save(uuid);
+        // 创建正版账号同样为关键操作：立即落库，避免崩溃丢新账号
+        saveNow(data);
         return plain;
     }
 
@@ -315,13 +359,21 @@ public final class PlayerDataManager {
         premiumNameIndex.put(name.toLowerCase(), premiumUuid);
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try (Connection conn = dataSource.getConnection()) {
-                try (PreparedStatement del = conn.prepareStatement(SQL_DELETE)) {
-                    del.setString(1, offlineUuid.toString());
-                    del.executeUpdate();
-                }
-                try (PreparedStatement ups = conn.prepareStatement(SQL_UPSERT)) {
-                    bindPlayerData(ups, premium);
-                    ups.executeUpdate();
+                // 删除离线记录与写入正版记录须在同一事务，避免中途崩溃导致两记录皆失（账号丢失）
+                conn.setAutoCommit(false);
+                try {
+                    try (PreparedStatement del = conn.prepareStatement(SQL_DELETE)) {
+                        del.setString(1, offlineUuid.toString());
+                        del.executeUpdate();
+                    }
+                    try (PreparedStatement ups = conn.prepareStatement(SQL_UPSERT)) {
+                        bindPlayerData(ups, premium);
+                        ups.executeUpdate();
+                    }
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
                 }
             } catch (SQLException e) {
                 plugin.getLogger().severe(I18n.get("log.migrate_failed", offlineUuid + ": " + e.getMessage()));

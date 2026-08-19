@@ -1,9 +1,13 @@
 package org.howtologin.plugin.config;
 
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -16,6 +20,8 @@ import java.util.regex.Pattern;
 public final class ConfigManager {
 
     private final HTLogin plugin;
+    // 配置被钳制/回退修正标记，load() 末尾统一写回 config.yml
+    private boolean configDirty;
 
     // 数据库设置
     private String databaseType;
@@ -78,6 +84,8 @@ public final class ConfigManager {
 
     // 正版验证
     private boolean premiumEnabled;
+    // 新玩家自动正版验证：关闭时新玩家直接离线进入，仅 /upgrade 标记的玩家验证
+    private boolean premiumAutoVerify;
     private int premiumTimeoutSeconds;
     private int premiumCrackerCacheSeconds;
     // 加密握手阶段等待 EncryptionResponse 的超时（毫秒），防止恶意客户端滞留会话
@@ -115,7 +123,7 @@ public final class ConfigManager {
         plugin.reloadConfig();
 
         // 版本检查：config.yml 的 version 字段存储完整版本号
-        // - major.minor 变化：覆盖 config.yml + 语言文件（配置结构可能变化）
+        // - major.minor 变化：增量合并新配置键 + 覆盖语言文件（保留用户已有的自定义值，不整体覆盖）
         // - patch 变化：仅覆盖语言文件，手动更新 version 字段（保留用户配置）
         FileConfiguration config = plugin.getConfig();
         String fileVersion = config.getString("version", "");
@@ -125,10 +133,8 @@ public final class ConfigManager {
             boolean majorMinorChanged = !majorMinor(pluginVersion).equals(majorMinor(fileVersion));
 
             if (majorMinorChanged) {
-                // major.minor 变化：覆盖 config + 语言文件
-                plugin.saveResource("config.yml", true);
-                plugin.reloadConfig();
-                config = plugin.getConfig();
+                // major.minor 变化：增量合并，仅补入用户 config 缺失的新配置键，保留用户已有值
+                mergeMissingKeys(config);
             } else {
                 // 仅 patch 变化：不覆盖 config，只更新 version 字段
                 config.set("version", pluginVersion);
@@ -155,6 +161,8 @@ public final class ConfigManager {
         if (!"sqlite".equals(this.databaseType) && !"mysql".equals(this.databaseType)) {
             plugin.getLogger().warning(I18n.get("log.config_database_type_invalid", this.databaseType, "sqlite"));
             this.databaseType = "sqlite";
+            config.set("database.type", "sqlite");
+            configDirty = true;
         }
         this.mysqlHost = config.getString("database.mysql.host", "localhost");
         this.mysqlPort = clampRange("database.mysql.port", config.getInt("database.mysql.port", 3306), 1, 65535);
@@ -265,6 +273,7 @@ public final class ConfigManager {
 
         // 正版验证
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
+        this.premiumAutoVerify = config.getBoolean("premium.auto-verify", true);
         this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 10), 1);
         this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);
         this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
@@ -282,6 +291,34 @@ public final class ConfigManager {
         boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
         I18n.setDefaultLocale(defaultLanguage);
         I18n.setClientLanguageDetection(clientLanguageDetection);
+
+        // 有修正时写回 config.yml，避免下次启动重复告警
+        if (configDirty) {
+            plugin.saveConfig();
+            configDirty = false;
+        }
+    }
+
+    /**
+     * 增量合并默认配置：从插件内置的 config.yml 读取新配置键，仅将用户 config 中缺失的键补入，
+     * 保留用户已有的自定义值（不再整体覆盖，避免升级时丢配置）。最后更新 version 字段并写回。
+     */
+    private void mergeMissingKeys(FileConfiguration config) {
+        try (InputStream is = plugin.getResource("config.yml")) {
+            if (is != null) {
+                FileConfiguration defaults =
+                        YamlConfiguration.loadConfiguration(new InputStreamReader(is, StandardCharsets.UTF_8));
+                for (String key : defaults.getKeys(true)) {
+                    if (!config.contains(key)) {
+                        config.set(key, defaults.get(key));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            plugin.getLogger().warning(I18n.get("log.config_merge_failed", e.getMessage()));
+        }
+        config.set("version", plugin.getPluginMeta().getVersion());
+        plugin.saveConfig();
     }
 
     /**
@@ -310,6 +347,8 @@ public final class ConfigManager {
     private int clampInt(String key, int value, int min) {
         if (value < min) {
             plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
+            plugin.getConfig().set(key, min);
+            configDirty = true;
             return min;
         }
         return value;
@@ -319,10 +358,14 @@ public final class ConfigManager {
     private int clampRange(String key, int value, int min, int max) {
         if (value < min) {
             plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, min));
+            plugin.getConfig().set(key, min);
+            configDirty = true;
             return min;
         }
         if (value > max) {
             plugin.getLogger().warning(I18n.get("log.config_num_clamped", key, value, max));
+            plugin.getConfig().set(key, max);
+            configDirty = true;
             return max;
         }
         return value;
@@ -389,6 +432,7 @@ public final class ConfigManager {
 
     // 正版验证
     public boolean premiumEnabled() { return premiumEnabled; }
+    public boolean premiumAutoVerify() { return premiumAutoVerify; }
     public int premiumTimeoutSeconds() { return premiumTimeoutSeconds; }
     public int premiumCrackerCacheSeconds() { return premiumCrackerCacheSeconds; }
     public int premiumHandshakeTimeoutMs() { return premiumHandshakeTimeoutMs; }

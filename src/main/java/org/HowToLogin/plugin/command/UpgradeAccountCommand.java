@@ -5,7 +5,6 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
-import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -45,11 +44,6 @@ public final class UpgradeAccountCommand implements BasicCommand {
         // 正版验证总开关或升级开关未开启时升级不可用
         if (!plugin.getConfigManager().premiumEnabled() || !plugin.getConfigManager().premiumUpgradeEnabled()) {
             player.sendMessage(HTLogin.legacy(I18n.get("upgrade.disabled")));
-            return;
-        }
-        // 缺少 PacketEvents 时正版验证无法运行，升级无效
-        if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.unavailable")));
             return;
         }
 

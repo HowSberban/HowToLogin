@@ -49,7 +49,7 @@ public final class MojangClient {
 
     public MojangClient(HTLogin plugin) {
         this.plugin = plugin;
-        int poolSize = Math.max(2, plugin.getConfigManager().premiumHttpPoolSize());
+        int poolSize = plugin.getConfigManager().premiumHttpPoolSize();
         this.httpExecutor = Executors.newFixedThreadPool(poolSize, r -> {
             Thread t = new Thread(r, "HTLogin-Mojang");
             t.setDaemon(true);

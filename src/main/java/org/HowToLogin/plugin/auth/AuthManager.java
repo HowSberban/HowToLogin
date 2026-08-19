@@ -3,6 +3,7 @@ package org.howtologin.plugin.auth;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.api.event.HTLoginLoginEvent;
+import org.howtologin.plugin.api.event.HTLoginLoginFailEvent;
 import org.howtologin.plugin.api.event.HTLoginLogoutEvent;
 import org.howtologin.plugin.api.event.HTLoginRegisterEvent;
 import org.howtologin.plugin.api.event.HTLoginUnregisterEvent;
@@ -21,6 +22,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.BiConsumer;
 
 public final class AuthManager {
 
@@ -30,6 +32,8 @@ public final class AuthManager {
     // 线程安全集合，用于 Folia 多线程区域化调度
     private final Set<UUID> loggedIn = ConcurrentHashMap.newKeySet();
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
+    // 标记密码异步校验进行中的玩家：防止快速重复提交 /login 触发重复校验、重复登录事件与消息
+    private final Set<UUID> verifying = ConcurrentHashMap.newKeySet();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
     // 标记当前会话被设为旁观的玩家：onLoginSuccess 仅对这些玩家恢复游戏模式，
@@ -142,39 +146,73 @@ public final class AuthManager {
     }
 
     // Login
-    public boolean login(Player player, String password) {
+    /**
+     * 异步登录：bcrypt 密码校验在异步线程执行（约 100ms，避免阻塞服务端 tick），
+     * 成功/失败后的状态变更与事件回到玩家区域线程执行（Folia 线程安全）。
+     * @param done 回调（在玩家区域线程调用）：参数 1 是否登录成功；参数 2 失败时的剩余踢出秒数
+     */
+    public void loginAsync(Player player, String password, BiConsumer<Boolean, Long> done) {
         UUID uuid = player.getUniqueId();
-        // 踢出期内拒绝登录
-        if (isKicked(player)) return false;
-
-        PlayerData data = dataManager.getPlayer(uuid);
-        if (data == null) return false;
-
-        if (PasswordHash.checkPassword(password, data.passwordHash())) {
-            // 自动对齐：配置算法与存储算法不一致时，登录成功后用配置算法重新哈希
-            String configured = configManager.passwordHashAlgorithm();
-            boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
-            boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
-            if (configIsBcrypt != storedIsBcrypt) {
-                String newHash = PasswordHash.hashPassword(password, configured);
-                data.passwordHash(newHash);
-                dataManager.updatePassword(uuid, newHash);
-            }
-            data.lastLogin(System.currentTimeMillis() / 1000);
-            if (player.getAddress() != null) {
-                data.ip(player.getAddress().getAddress().getHostAddress());
-            }
-            dataManager.save(uuid);
-
-            markLoggedIn(uuid);
-            // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
-            clearPremiumFallback(uuid);
-            onLoginSuccess(player);
-            Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
-            return true;
+        // 轻量检查（主线程/调用线程）
+        if (isKicked(player)) {
+            done.accept(false, getKickRemaining(player));
+            return;
         }
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) {
+            done.accept(false, 0L);
+            return;
+        }
+        // 重入保护：已有一次密码校验进行中时静默忽略本次，避免重复校验、重复登录事件与消息
+        if (!verifying.add(uuid)) {
+            return;
+        }
+        final PlayerData snapshot = data;
+        // bcrypt 校验耗时，移到异步线程执行
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            boolean ok = PasswordHash.checkPassword(password, snapshot.passwordHash());
+            // 状态变更需回到玩家区域线程（Folia 线程安全）
+            player.getScheduler().run(plugin, task2 -> {
+                verifying.remove(uuid);
+                if (!ok) {
+                    handleLoginFailure(player);
+                    done.accept(false, isKicked(player) ? getKickRemaining(player) : 0L);
+                } else {
+                    completeLogin(player, snapshot, password);
+                    done.accept(true, 0L);
+                }
+            }, null);
+        });
+    }
 
-        // 登录失败，增加计数（仅在启用失败保护时）
+    /** 登录成功收尾：密码算法对齐、更新 IP/时间、标记登录、恢复模式、触发事件（须在玩家区域线程调用） */
+    private void completeLogin(Player player, PlayerData data, String password) {
+        UUID uuid = player.getUniqueId();
+        // 自动对齐：配置算法与存储算法不一致时，登录成功后用配置算法重新哈希
+        String configured = configManager.passwordHashAlgorithm();
+        boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
+        boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
+        if (configIsBcrypt != storedIsBcrypt) {
+            // 仅更新内存哈希，随下方 save() 的周期 flush 全量落库（无需单独 updatePassword）
+            data.passwordHash(PasswordHash.hashPassword(password, configured));
+        }
+        data.lastLogin(System.currentTimeMillis() / 1000);
+        if (player.getAddress() != null) {
+            data.ip(player.getAddress().getAddress().getHostAddress());
+        }
+        dataManager.save(uuid);
+
+        markLoggedIn(uuid);
+        // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
+        clearPremiumFallback(uuid);
+        onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
+    }
+
+    /** 登录失败处理：失败计数（可能触发踢出）+ 触发失败事件（须在玩家区域线程调用） */
+    private void handleLoginFailure(Player player) {
+        UUID uuid = player.getUniqueId();
+        // 增加计数（仅在启用失败保护时）
         if (configManager.failProtectionEnabled()) {
             long now = System.currentTimeMillis();
             long resetMs = configManager.failProtectionResetSeconds() * 1000L;
@@ -205,7 +243,7 @@ public final class AuthManager {
                 failedAttempts.remove(uuid);
             }
         }
-        return false;
+        Bukkit.getPluginManager().callEvent(new HTLoginLoginFailEvent(player, HTLoginLoginFailEvent.Reason.WRONG_PASSWORD));
     }
 
     // ===== 管理员强制操作 =====
@@ -505,6 +543,8 @@ public final class AuthManager {
         UUID uuid = player.getUniqueId();
         loggedIn.remove(uuid);
         pendingLogin.remove(uuid);
+        // 清除密码校验进行中标记（玩家在校验完成前退出时，异步回调的 player 调度不会执行，需在此兜底清理）
+        verifying.remove(uuid);
         // 清除传送过渡期标记，防止下次登录时错误无敌
         invulnerablePending.remove(uuid);
         // 清除旁观标记（未登录退出时防止下次登录误恢复游戏模式）
@@ -791,9 +831,10 @@ public final class AuthManager {
      * 标记玩家为 spectatorPending，onLoginSuccess 时据此恢复游戏模式。
      * <p>
      * 当 gamemode.enabled=false 时，若坐标保护未开启且退出位置悬空，仍强制切换为旁观模式：
-     * 坐标保护未开启时玩家在退出位置生成，悬空位置会导致坠落暴露位置。
-     * 此时退出位置区块已加载（玩家刚在此生成），可安全进行同步方块检查。
-     * 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（setGameMode 非线程安全）。
+     * 退出位置悬空时玩家会在该处坠落暴露位置。
+     * 悬空检查通过 ChunkSnapshot 读取（快照线程安全），任意线程可安全访问，
+     * 避免 Folia 下在非所属区域线程读取退出位置所在世界（可能为其它世界或其它区域）的方块。
+     * 最终 setGameMode 使用玩家调度器执行，保证 Folia 下在玩家区域线程调用（非线程安全）。
      */
     public void setSpectator(Player player) {
         if (!configManager.protectionGamemodeEnabled()) {
@@ -801,12 +842,20 @@ public final class AuthManager {
             if (configManager.protectionPosEnabled()) return;
             Location logoutLoc = getLogoutLocation(player);
             if (logoutLoc == null || logoutLoc.getWorld() == null) return;
-            var below = logoutLoc.getWorld().getBlockAt(
-                    logoutLoc.getBlockX(), logoutLoc.getBlockY() - 1, logoutLoc.getBlockZ());
-            if (below.getType().isSolid()) return;
+            if (isBlockSolidBelow(logoutLoc)) return;
         }
         spectatorPending.add(player.getUniqueId());
         player.getScheduler().run(plugin, task -> player.setGameMode(org.bukkit.GameMode.SPECTATOR), null);
+    }
+
+    /** 判断退出位置正下方方块是否固体（用于悬空检查）。快照读取线程安全，可在任意线程调用 */
+    private static boolean isBlockSolidBelow(Location loc) {
+        World world = loc.getWorld();
+        int y = loc.getBlockY() - 1;
+        if (y <= world.getMinHeight() || y >= world.getMaxHeight()) return false;
+        org.bukkit.ChunkSnapshot snap = world.getChunkAtAsyncUrgently(
+                loc.getBlockX() >> 4, loc.getBlockZ() >> 4).join().getChunkSnapshot();
+        return snap.getBlockData(loc.getBlockX() & 15, y, loc.getBlockZ() & 15).getMaterial().isSolid();
     }
 
     /**

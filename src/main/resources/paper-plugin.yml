@@ -14,7 +14,7 @@ dependencies:
   server:
     packetevents:
       load: BEFORE
-      required: false
+      required: true
     PlaceholderAPI:
       load: BEFORE
       required: false

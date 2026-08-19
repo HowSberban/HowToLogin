@@ -131,8 +131,12 @@ settings:
 # 在 online-mode=false 的服务端上，通过 PacketEvents 拦截登录流程，
 # 让正版客户端完成 Mojang 加密验证，获取真实正版 UUID 并实现免密进服
 premium:
-  # 是否启用正版验证（总开关）
+  # 是否启用正版验证（总开关，控制升级验证与已注册正版玩家的验证）
   enabled: false
+  # 新玩家自动正版验证：开启时新进服玩家自动尝试正版验证
+  # 关闭时新玩家直接以离线身份进入，仅通过 /upgrade 标记的玩家会进行正版验证
+  # 已注册正版玩家（premium=1）不受此开关影响，始终验证
+  auto-verify: true
   # hasJoined HTTP 超时（秒），超时视为 Mojang 服务不可用
   timeout-seconds: 10
   # 离线客户端首次失败后的重连缓存有效期（秒）

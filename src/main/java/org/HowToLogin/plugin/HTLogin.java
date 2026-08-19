@@ -3,6 +3,7 @@ package org.howtologin.plugin;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import com.github.retrooper.packetevents.PacketEvents;
 import org.howtologin.plugin.api.HTLoginApi;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.command.*;
@@ -10,6 +11,8 @@ import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.hook.HTLoginExpansion;
 import org.howtologin.plugin.listener.PlayerListener;
+import org.howtologin.plugin.packet.InventoryPacketListener;
+import org.howtologin.plugin.premium.ConnectionHandler;
 import org.howtologin.plugin.premium.DataService;
 import org.howtologin.plugin.premium.MojangClient;
 import org.howtologin.plugin.premium.PlayerInjector;
@@ -17,8 +20,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 public final class HTLogin extends JavaPlugin {
 
@@ -26,9 +29,11 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
-    // 正版验证组件（仅 PacketEvents 前置时创建）
+    // 正版验证异步组件（线程池管理等，禁用时回收）
     private MojangClient mojangClient;
     private PlayerInjector playerInjector;
+    // 数据库脏数据批量落库周期（秒）
+    private static final int DB_SAVE_FLUSH_SECONDS = 5;
 
     @Override
     public void onEnable() {
@@ -43,6 +48,9 @@ public final class HTLogin extends JavaPlugin {
         hookPlaceholderAPI();
         registerPacketListener();
         registerPremiumListener();
+        // 周期批量落库脏数据（合并 DB 写，降低 SQLite 锁竞争与 IO 开销）
+        Bukkit.getAsyncScheduler().runAtFixedRate(this,
+                task -> playerDataManager.flushDirty(), 1, DB_SAVE_FLUSH_SECONDS, TimeUnit.SECONDS);
         rePendOnlinePlayers();
 
         // 初始化 API 单例：必须在 AuthManager/PlayerDataManager 初始化完成后，
@@ -107,75 +115,28 @@ public final class HTLogin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(playerListener, this);
     }
 
-    /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包，需要 PacketEvents 前置） */
+    /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包） */
     private void registerPacketListener() {
-        if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            if (configManager.protectionInventoryEnabled()) {
-                getLogger().warning(I18n.get("log.packetevents_missing"));
-            }
-            return;
-        }
         // 始终注册监听器，是否拦截由 InventoryPacketListener 按 protection.inventory.enabled 实时判断，
         // 使配置热重载（/htlogin reload）能即时开关背包保护而不必重启
-        // 反射加载：InventoryPacketListener 继承 PacketEvents 类，
-        // 若直接 import 会在插件加载阶段触发 PacketEvents 类解析失败
-        try {
-            Class<?> listenerClass = Class.forName("org.howtologin.plugin.packet.InventoryPacketListener");
-            Object listener = listenerClass.getConstructor(AuthManager.class, ConfigManager.class)
-                    .newInstance(authManager, configManager);
-            registerPacketEventsListener(listener);
-        } catch (Exception e) {
-            getLogger().warning(I18n.get("log.packet_listener_failed", e.getMessage()));
-        }
+        PacketEvents.getAPI().getEventManager()
+                .registerListener(new InventoryPacketListener(authManager, configManager));
     }
 
     /**
-     * 注册正版验证监听器（需要 PacketEvents 前置）。
-     * DataService/MojangClient 不依赖 PacketEvents，可直接实例化；
-     * PlayerInjector/ConnectionHandler 依赖 PacketEvents，反射加载。
+     * 注册正版验证监听器。
+     * DataService/MojangClient/PlayerInjector 不依赖 PacketEvents，可直接实例化；
+     * ConnectionHandler 依赖 PacketEvents（硬依赖），直接实例化并注册。
      * 始终注册监听器；是否拦截正版玩家由 ConnectionHandler 按数据库 premium 标记实时判断
      * （premium=1 始终验证，配置文件 premium.enabled 只决定新玩家是否验证），
      * 使配置热重载（/htlogin reload）能即时开关正版验证而不必重启。
      */
     private void registerPremiumListener() {
-        if (Bukkit.getPluginManager().getPlugin("packetevents") == null) {
-            if (configManager.premiumEnabled()) {
-                getLogger().warning(I18n.get("log.packetevents_missing"));
-            }
-            // 缺少 PacketEvents 且数据库存在正版玩家：无法运行正版验证，
-            // 已注册正版玩家将掉线并从离线模式重建账号 → Error 级红色告警
-            if (playerDataManager.hasPremiumPlayers()) {
-                getLogger().severe(I18n.get("log.premium_account_at_risk"));
-            }
-            return;
-        }
-        try {
-            DataService dataService = new DataService(playerDataManager, configManager);
-            this.mojangClient = new MojangClient(this);
-            this.playerInjector = new PlayerInjector(this);
-
-            Class<?> handlerClass = Class.forName("org.howtologin.plugin.premium.ConnectionHandler");
-            Object handler = handlerClass
-                    .getConstructor(HTLogin.class, DataService.class, MojangClient.class, PlayerInjector.class, AuthManager.class)
-                    .newInstance(this, dataService, this.mojangClient, this.playerInjector, authManager);
-
-            registerPacketEventsListener(handler);
-        } catch (Exception e) {
-            getLogger().warning(I18n.get("log.premium_listener_failed", e.getMessage()));
-        }
-    }
-
-    /** 反射注册监听器到 PacketEvents（避免 HTLogin 常量池引用 PacketEvents 类） */
-    private void registerPacketEventsListener(Object listener) throws Exception {
-        Class<?> peClass = Class.forName("com.github.retrooper.packetevents.PacketEvents");
-        Object api = peClass.getMethod("getAPI").invoke(null);
-        Object eventManager = api.getClass().getMethod("getEventManager").invoke(api);
-        for (Method m : eventManager.getClass().getMethods()) {
-            if (m.getName().equals("registerListener") && m.getParameterCount() == 1) {
-                m.invoke(eventManager, listener);
-                return;
-            }
-        }
+        DataService dataService = new DataService(playerDataManager, configManager);
+        this.mojangClient = new MojangClient(this);
+        this.playerInjector = new PlayerInjector(this);
+        PacketEvents.getAPI().getEventManager()
+                .registerListener(new ConnectionHandler(this, dataService, mojangClient, playerInjector, authManager));
     }
 
     public ConfigManager getConfigManager() {

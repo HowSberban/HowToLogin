@@ -99,13 +99,7 @@ public final class DataService {
      * 检查离线确认标记是否有效。
      */
     public boolean isOfflineConfirmed(String ip, String name) {
-        Long expire = offlineConfirmed.get(cacheKey(ip, name));
-        if (expire == null) return false;
-        if (System.currentTimeMillis() > expire) {
-            offlineConfirmed.remove(cacheKey(ip, name));
-            return false;
-        }
-        return true;
+        return isCacheValid(offlineConfirmed, ip, name);
     }
 
     /**
@@ -123,13 +117,7 @@ public final class DataService {
      * 检查正版验证回退标记是否有效。
      */
     public boolean isPremiumFallbackConfirmed(String ip, String name) {
-        Long expire = premiumFallbackConfirmed.get(cacheKey(ip, name));
-        if (expire == null) return false;
-        if (System.currentTimeMillis() > expire) {
-            premiumFallbackConfirmed.remove(cacheKey(ip, name));
-            return false;
-        }
-        return true;
+        return isCacheValid(premiumFallbackConfirmed, ip, name);
     }
 
     /**
@@ -146,6 +134,18 @@ public final class DataService {
 
     private static String cacheKey(String ip, String name) {
         return ip + "|" + name.toLowerCase();
+    }
+
+    /** 检查缓存标记是否有效：未命中或已过期返回 false，过期时顺带清理 */
+    private static boolean isCacheValid(Map<String, Long> map, String ip, String name) {
+        String key = cacheKey(ip, name);
+        Long expire = map.get(key);
+        if (expire == null) return false;
+        if (System.currentTimeMillis() > expire) {
+            map.remove(key);
+            return false;
+        }
+        return true;
     }
 
     /**

@@ -46,8 +46,8 @@ import java.util.concurrent.TimeUnit;
  * - Mojang HTTP 在异步线程执行
  * - 状态推进切回 IO 线程（channel.eventLoop）
  * <p>
- * 仅拦截需要正版验证的连接（premium=1 或新玩家），离线玩家（premium=0 或离线确认命中）
- * 不取消 LoginStart，由服务端原生处理。
+ * 仅拦截需要正版验证的连接（premium=1、开启自动验证的新玩家或升级尝试），
+ * 离线玩家（premium=0 或离线确认命中）不取消 LoginStart，由服务端原生处理。
  */
 public final class ConnectionHandler extends PacketListenerAbstract {
 
@@ -120,12 +120,11 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             upgradeAttempt = true;
         }
 
-        // 3. 新玩家（不在数据库）：仅当正版验证开启时才拦截验证，否则按离线处理
+        // 3. 新玩家（不在数据库）：仅当正版验证与自动验证均开启时才拦截验证，否则按离线处理
         //    同时检查离线确认标记，避免离线客户端反复尝试正版验证
         //    已注册玩家（含 premium=1）不受离线标记影响，防止同名离线玩家抢占正版账号
-        //    升级尝试不受离线标记与 premium.enabled 影响（玩家已主动选择升级）
         if (!profile.exists()) {
-            if (!config.premiumEnabled()) return;
+            if (!config.premiumEnabled() || !config.premiumAutoVerify()) return;
             if (dataService.isOfflineConfirmed(ip, username)) return;
         }
 
