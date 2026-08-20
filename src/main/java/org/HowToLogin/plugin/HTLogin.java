@@ -48,6 +48,13 @@ public final class HTLogin extends JavaPlugin {
         hookPlaceholderAPI();
         registerPacketListener();
         registerPremiumListener();
+        // 清理不活跃账号（启动时执行，此时玩家尚未进入）
+        if (configManager.purgeEnabled()) {
+            int purged = playerDataManager.purgeInactive(configManager.purgeDays());
+            if (purged > 0) {
+                getLogger().info(I18n.get("log.purge_inactive", purged, configManager.purgeDays()));
+            }
+        }
         // 周期批量落库脏数据（合并 DB 写，降低 SQLite 锁竞争与 IO 开销）
         Bukkit.getAsyncScheduler().runAtFixedRate(this,
                 task -> playerDataManager.flushDirty(), 1, DB_SAVE_FLUSH_SECONDS, TimeUnit.SECONDS);
@@ -100,6 +107,7 @@ public final class HTLogin extends JavaPlugin {
             Commands commands = event.registrar();
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
+            commands.register("2fa", "双因素认证", List.of("totp"), new TwoFactorCommand(this, authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
             commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
             commands.register("upgrade", "将离线账号升级为正版账号", List.of(), new UpgradeAccountCommand(this, authManager));
@@ -170,15 +178,7 @@ public final class HTLogin extends JavaPlugin {
     private void rePendOnlinePlayers() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (authManager.isLoggedIn(player)) continue;
-            if (authManager.hasAccount(player)) {
-                authManager.addPendingLogin(player);
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
-            } else {
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
-            }
-            authManager.setSpectator(player);
-            playerListener.scheduleLoginTimeout(player);
-            playerListener.scheduleReminder(player, authManager.hasAccount(player));
+            playerListener.beginAuthFlow(player);
         }
     }
 

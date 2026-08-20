@@ -123,6 +123,8 @@ public final class HTLoginCommand {
         boolean dbChanged = plugin.getConfigManager().reload();
         I18n.reload();
         plugin.getAuthManager().cleanupExpiredStates();
+        // 提醒方式可能被切换：清理现有 BossBar，未登录玩家下个周期按新方式重新提醒
+        plugin.getPlayerListener().clearReminderBars();
         if (dbChanged) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));
             plugin.getLogger().warning(I18n.get("htlogin.reload_db_changed"));

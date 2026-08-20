@@ -42,12 +42,25 @@ login:
     reset-seconds: 300
   # 提示消息重复发送间隔（秒），0 = 仅发送一次
   remind-interval: 5
+  # 提示消息发送方式：chat（聊天栏）/ title（标题）/ actionbar（动作栏）/ bossbar（Boss 栏）
+  remind-method: chat
+  # IP 变动提醒：登录 IP 与上次不同时提示玩家（首次登录不提醒）
+  ip-change-notify:
+    enabled: true
   # IP 免密登录：上次登录 IP 与当前一致时自动登录
   ip-auto-login:
     enabled: true
     # 失效时间（分钟），超过此时间后需重新输入密码
     # 0 = 永不失效
     expire-minutes: 120
+
+# 双因素认证（TOTP）
+2fa:
+  # 是否启用双因素认证
+  # 关闭后已绑定的玩家跳过验证直接登录，密钥保留在数据库，重新开启后自动恢复
+  enabled: true
+  # 认证器应用中显示的发行方名称
+  issuer: HTLogin
 
 # 注册限制
 register:
@@ -84,6 +97,8 @@ prevent:
       - l
       - register
       - reg
+      - 2fa
+      - totp
   # 禁止与世界交互
   world-interaction: true
   # 禁止背包交互
@@ -112,7 +127,7 @@ protection:
   gamemode:
     enabled: false
   # 背包保护：未登录玩家无法查看自己的背包
-  # 需要前置插件 PacketEvents
+  # 通过 PacketEvents 拦截物品数据包，防止 mod 在客户端侧窥视背包内容
   inventory:
     enabled: false
 
@@ -126,8 +141,12 @@ settings:
   # 注销账号时是否删除 Minecraft 原版玩家数据（player.dat）
   # 包含背包、装备、血量、经验、位置、末影箱等
   real-unreg: true
+  # 清理不活跃账号：启动时删除超过 days 天未登录的账号（正版账号不受影响）
+  purge:
+    enabled: false
+    days: 90
 
-# 正版验证（需要前置插件 PacketEvents）
+# 正版验证
 # 在 online-mode=false 的服务端上，通过 PacketEvents 拦截登录流程，
 # 让正版客户端完成 Mojang 加密验证，获取真实正版 UUID 并实现免密进服
 premium:

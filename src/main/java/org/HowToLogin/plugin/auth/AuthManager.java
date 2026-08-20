@@ -26,6 +26,16 @@ import java.util.function.BiConsumer;
 
 public final class AuthManager {
 
+    /** 登录结果 */
+    public enum LoginResult {
+        /** 登录成功 */
+        SUCCESS,
+        /** 密码正确但需完成双因素认证 */
+        NEED_2FA,
+        /** 登录失败 */
+        FAILED
+    }
+
     private final HTLogin plugin;
     private final PlayerDataManager dataManager;
     private final ConfigManager configManager;
@@ -34,6 +44,10 @@ public final class AuthManager {
     private final Set<UUID> pendingLogin = ConcurrentHashMap.newKeySet();
     // 标记密码异步校验进行中的玩家：防止快速重复提交 /login 触发重复校验、重复登录事件与消息
     private final Set<UUID> verifying = ConcurrentHashMap.newKeySet();
+    // 双因素认证：密码已通过但尚未完成 TOTP 验证的玩家（未完成前不算已登录）
+    private final Set<UUID> pending2fa = ConcurrentHashMap.newKeySet();
+    // 双因素设置中的临时密钥：confirm 验证通过后才持久化
+    private final Map<UUID, String> pending2faSecret = new ConcurrentHashMap<>();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
     // 标记当前会话被设为旁观的玩家：onLoginSuccess 仅对这些玩家恢复游戏模式，
@@ -120,8 +134,7 @@ public final class AuthManager {
         }
         String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm());
         dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
-        loggedIn.add(uuid);
-        pendingLogin.remove(uuid);
+        markLoggedIn(uuid);
         onLoginSuccess(player);
         Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, player));
         return true;
@@ -149,18 +162,18 @@ public final class AuthManager {
     /**
      * 异步登录：bcrypt 密码校验在异步线程执行（约 100ms，避免阻塞服务端 tick），
      * 成功/失败后的状态变更与事件回到玩家区域线程执行（Folia 线程安全）。
-     * @param done 回调（在玩家区域线程调用）：参数 1 是否登录成功；参数 2 失败时的剩余踢出秒数
+     * @param done 回调（在玩家区域线程调用）：参数 1 登录结果；参数 2 失败时的剩余踢出秒数
      */
-    public void loginAsync(Player player, String password, BiConsumer<Boolean, Long> done) {
+    public void loginAsync(Player player, String password, BiConsumer<LoginResult, Long> done) {
         UUID uuid = player.getUniqueId();
         // 轻量检查（主线程/调用线程）
         if (isKicked(player)) {
-            done.accept(false, getKickRemaining(player));
+            done.accept(LoginResult.FAILED, getKickRemaining(player));
             return;
         }
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) {
-            done.accept(false, 0L);
+            done.accept(LoginResult.FAILED, 0L);
             return;
         }
         // 重入保护：已有一次密码校验进行中时静默忽略本次，避免重复校验、重复登录事件与消息
@@ -176,30 +189,43 @@ public final class AuthManager {
                 verifying.remove(uuid);
                 if (!ok) {
                     handleLoginFailure(player);
-                    done.accept(false, isKicked(player) ? getKickRemaining(player) : 0L);
+                    done.accept(LoginResult.FAILED, isKicked(player) ? getKickRemaining(player) : 0L);
                 } else {
-                    completeLogin(player, snapshot, password);
-                    done.accept(true, 0L);
+                    // 密码算法对齐（密码明文仅此处可用，须在进入 2FA 等待前完成）
+                    alignPasswordHash(snapshot, password);
+                    if (snapshot.totpSecret() != null && configManager.twoFactorEnabled()) {
+                        // 密码正确但需双因素认证：进入待验证状态，不算已登录
+                        // 开关关闭时跳过验证（密钥保留在数据库，重新开启后恢复）
+                        pending2fa.add(uuid);
+                        done.accept(LoginResult.NEED_2FA, 0L);
+                    } else {
+                        completeLogin(player, snapshot);
+                        done.accept(LoginResult.SUCCESS, 0L);
+                    }
                 }
             }, null);
         });
     }
 
-    /** 登录成功收尾：密码算法对齐、更新 IP/时间、标记登录、恢复模式、触发事件（须在玩家区域线程调用） */
-    private void completeLogin(Player player, PlayerData data, String password) {
-        UUID uuid = player.getUniqueId();
-        // 自动对齐：配置算法与存储算法不一致时，登录成功后用配置算法重新哈希
+    /** 密码算法对齐：配置算法与存储算法不一致时，用配置算法重新哈希（仅更新内存，随周期 flush 落库） */
+    private void alignPasswordHash(PlayerData data, String password) {
         String configured = configManager.passwordHashAlgorithm();
         boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
         boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
         if (configIsBcrypt != storedIsBcrypt) {
-            // 仅更新内存哈希，随下方 save() 的周期 flush 全量落库（无需单独 updatePassword）
             data.passwordHash(PasswordHash.hashPassword(password, configured));
         }
+    }
+
+    /** 登录成功收尾：IP 变动提醒、更新 IP/时间/活跃时间、标记登录、恢复模式、触发事件（须在玩家区域线程调用） */
+    private void completeLogin(Player player, PlayerData data) {
+        UUID uuid = player.getUniqueId();
+        String oldIp = data.ip();
         data.lastLogin(System.currentTimeMillis() / 1000);
         if (player.getAddress() != null) {
             data.ip(player.getAddress().getAddress().getHostAddress());
         }
+        data.lastActive(System.currentTimeMillis() / 1000);
         dataManager.save(uuid);
 
         markLoggedIn(uuid);
@@ -207,6 +233,88 @@ public final class AuthManager {
         clearPremiumFallback(uuid);
         onLoginSuccess(player);
         Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
+        // IP 变动提醒：上次登录 IP 存在且与本次不同（首次登录无旧 IP 可比，不提醒）
+        if (configManager.ipChangeNotifyEnabled()
+                && oldIp != null && !oldIp.isEmpty()
+                && !oldIp.equals(data.ip())) {
+            player.sendMessage(HTLogin.legacy(I18n.get("login.ip_changed", player, oldIp)));
+        }
+    }
+
+    // ===== 双因素认证（TOTP） =====
+
+    /** 账号是否处于双因素认证生效状态（已绑定密钥且全局开关开启） */
+    public boolean has2fa(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
+        return data != null && data.totpSecret() != null && configManager.twoFactorEnabled();
+    }
+
+    /** 玩家是否处于双因素待验证状态（密码已通过，TOTP 未完成） */
+    public boolean isPending2fa(UUID uuid) {
+        return pending2fa.contains(uuid);
+    }
+
+    /**
+     * 完成双因素验证：校验 TOTP 验证码，通过则完成登录。
+     * @return true 验证通过且登录完成
+     */
+    public boolean verify2fa(Player player, String code) {
+        UUID uuid = player.getUniqueId();
+        if (!pending2fa.remove(uuid)) return false;
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null || data.totpSecret() == null) return false;
+        if (!Totp.verifyCode(data.totpSecret(), code)) {
+            // 验证失败：回到待验证状态，玩家可重试
+            pending2fa.add(uuid);
+            return false;
+        }
+        completeLogin(player, data);
+        return true;
+    }
+
+    /** 开始双因素设置：生成临时密钥（confirm 通过后才持久化），返回给玩家添加到认证器应用 */
+    public String setup2fa(Player player) {
+        UUID uuid = player.getUniqueId();
+        if (has2fa(uuid)) return null;
+        String secret = Totp.generateSecret();
+        pending2faSecret.put(uuid, secret);
+        return secret;
+    }
+
+    /** 确认双因素绑定：验证码通过后持久化临时密钥 */
+    public boolean confirm2fa(Player player, String code) {
+        UUID uuid = player.getUniqueId();
+        String secret = pending2faSecret.get(uuid);
+        if (secret == null) return false;
+        if (!Totp.verifyCode(secret, code)) return false;
+        pending2faSecret.remove(uuid);
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) return false;
+        data.totpSecret(secret);
+        dataManager.save(uuid);
+        return true;
+    }
+
+    /** 关闭双因素认证：需验证当前 TOTP 验证码（而非密码——2FA 正是防密码泄漏，解绑也须持有验证器） */
+    public boolean disable2fa(Player player, String code) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null || data.totpSecret() == null) return false;
+        if (!Totp.verifyCode(data.totpSecret(), code)) return false;
+        data.totpSecret(null);
+        dataManager.save(uuid);
+        return true;
+    }
+
+    /**
+     * 更新玩家活跃时间：玩家加入时调用，无论是否登录成功（活跃=进过服）。
+     * 未注册玩家无账号不处理（完全不写库）。
+     */
+    public void touchActive(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data == null) return;
+        data.lastActive(System.currentTimeMillis() / 1000);
+        dataManager.save(player.getUniqueId());
     }
 
     /** 登录失败处理：失败计数（可能触发踢出）+ 触发失败事件（须在玩家区域线程调用） */
@@ -216,14 +324,9 @@ public final class AuthManager {
         if (configManager.failProtectionEnabled()) {
             long now = System.currentTimeMillis();
             long resetMs = configManager.failProtectionResetSeconds() * 1000L;
-            // 容量守卫 + 过期清理：失败计数跨连接保留后不再随退出清理，攻击者可用大量用户名
-            // 各失败未达阈值使 Map 无界增长，超限时清理未达阈值或已过期的条目
+            // 容量守卫：失败计数跨连接保留后不再随退出清理，超限时清理可安全移除的条目
             if (failedAttempts.size() > FAILED_ATTEMPTS_CAP) {
-                failedAttempts.entrySet().removeIf(e -> {
-                    long[] v = e.getValue();
-                    return v[0] < configManager.failMaxAttempts()
-                            || (resetMs > 0 && now - v[1] >= resetMs);
-                });
+                evictStaleFailures(now);
             }
             // 原子计数：距上次失败超过过期时长则重置为 1，否则累加（跨连接保留）
             int[] attempts = new int[1];
@@ -241,6 +344,11 @@ public final class AuthManager {
                 // 达到阈值，设置踢出期
                 kickUntil.put(uuid, now + configManager.failKickDuration() * 1000L);
                 failedAttempts.remove(uuid);
+                // 容量守卫：攻击者用大量用户名各达阈值后不再重连，踢出记录仅在被读取时懒清理，
+                // 超限时清理已过期项，防止 Map 无界增长（与 failedAttempts 守卫同一威胁模型）
+                if (kickUntil.size() > FAILED_ATTEMPTS_CAP) {
+                    kickUntil.values().removeIf(until -> until <= now);
+                }
             }
         }
         Bukkit.getPluginManager().callEvent(new HTLoginLoginFailEvent(player, HTLoginLoginFailEvent.Reason.WRONG_PASSWORD));
@@ -308,30 +416,17 @@ public final class AuthManager {
         return System.currentTimeMillis() - lastLogin * 1000L < expireMillis;
     }
 
-    // 通过 IP 免密登录：跳过密码验证，直接标记为已登录
-    public void loginByIp(Player player) {
-        UUID uuid = player.getUniqueId();
-        PlayerData data = dataManager.getPlayer(uuid);
-        if (data == null) return;
-        data.lastLogin(System.currentTimeMillis() / 1000);
-        dataManager.save(uuid);
-        markLoggedIn(uuid);
-        onLoginSuccess(player);
-        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
+    // 免密登录：跳过密码验证直接完成登录（IP 一致或正版验证通过后调用）
+    public void autoLogin(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data != null) {
+            completeLogin(player, data);
+        }
     }
 
     // Logout
     public void logout(Player player) {
-        UUID uuid = player.getUniqueId();
-        loggedIn.remove(uuid);
-        pendingLogin.add(uuid);
-        // 清除 lastLogin 使 IP 自动登录立即失效，下次必须用密码登录
-        PlayerData data = dataManager.getPlayer(uuid);
-        if (data != null) {
-            data.lastLogin(0);
-            dataManager.save(uuid);
-        }
-        Bukkit.getPluginManager().callEvent(new HTLoginLogoutEvent(uuid, player));
+        forceLogout(player.getUniqueId());
     }
 
     // Change password
@@ -355,6 +450,8 @@ public final class AuthManager {
         dataManager.removePlayer(uuid);
         loggedIn.remove(uuid);
         pendingLogin.remove(uuid);
+        pending2fa.remove(uuid);
+        pending2faSecret.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
@@ -530,10 +627,11 @@ public final class AuthManager {
         return file.delete();
     }
 
-    /** 标记玩家为已登录：清理待登录、失败计数、踢出记录 */
+    /** 标记玩家为已登录：清理待登录、双因素待验证、失败计数、踢出记录 */
     private void markLoggedIn(UUID uuid) {
         loggedIn.add(uuid);
         pendingLogin.remove(uuid);
+        pending2fa.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
     }
@@ -545,10 +643,16 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         // 清除密码校验进行中标记（玩家在校验完成前退出时，异步回调的 player 调度不会执行，需在此兜底清理）
         verifying.remove(uuid);
+        // 清除双因素认证会话状态（未完成验证即退出）
+        pending2fa.remove(uuid);
+        pending2faSecret.remove(uuid);
         // 清除传送过渡期标记，防止下次登录时错误无敌
         invulnerablePending.remove(uuid);
         // 清除旁观标记（未登录退出时防止下次登录误恢复游戏模式）
         spectatorPending.remove(uuid);
+        // 清除正版回退标记（会话级状态：本次连接要求密码登录，退出即失效，
+        // 防止残留标记使下次验证成功的连接仍误走密码路径）
+        premiumFallback.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
         // 注意：不清除失败计数与踢出记录（failedAttempts / kickUntil）。
@@ -621,19 +725,27 @@ public final class AuthManager {
         return remaining > 0 ? remaining / 1000 : 0;
     }
 
-    /** 清理已过期的踢出记录、失败计数和注销拒绝重连记录（由周期任务每分钟调用，reload 时也会调用） */
+    /**
+     * 全量清理已过期的踢出记录、失败计数和注销拒绝重连记录（reload 和 unregister 时调用）。
+     * 常规运行依赖懒清理（读取时发现过期即删）+ 容量守卫（failedAttempts 超 1000 触发），
+     * 不再登录的玩家条目会残留但仅几十字节/条，无需周期任务扫描。
+     */
     public void cleanupExpiredStates() {
         long now = System.currentTimeMillis();
+        kickUntil.values().removeIf(until -> until <= now);
+        evictStaleFailures(now);
+        // 清理已过期的注销拒绝重连记录
+        recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
+    }
+
+    /** 清理可安全移除的失败计数：未达阈值，或超过过期时长未再失败（玩家可能已离线/已放弃尝试） */
+    private void evictStaleFailures(long now) {
         long resetMs = configManager.failProtectionResetSeconds() * 1000L;
-        kickUntil.entrySet().removeIf(entry -> entry.getValue() <= now);
-        // 清理未达阈值的失败计数，以及超过过期时长未再失败的计数（玩家可能已离线/已放弃尝试）
         failedAttempts.entrySet().removeIf(entry -> {
             long[] v = entry.getValue();
             return v[0] < configManager.failMaxAttempts()
                     || (resetMs > 0 && now - v[1] >= resetMs);
         });
-        // 清理已过期的注销拒绝重连记录
-        recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
     }
 
     // ===== 坐标保护相关 =====
@@ -738,25 +850,6 @@ public final class AuthManager {
     /** 正版玩家是否为验证失败回退进入（本次需密码登录） */
     public boolean isPremiumFallback(UUID premiumUuid) {
         return premiumFallback.contains(premiumUuid);
-    }
-
-    /**
-     * 正版玩家免密登录：更新登录时间和 IP，标记为已登录。
-     * 与 loginByIp 类似但不检查 IP 一致性（正版玩家始终免密）。
-     */
-    public void loginByPremium(Player player) {
-        UUID uuid = player.getUniqueId();
-        PlayerData data = dataManager.getPlayer(uuid);
-        if (data != null) {
-            data.lastLogin(System.currentTimeMillis() / 1000);
-            if (player.getAddress() != null) {
-                data.ip(player.getAddress().getAddress().getHostAddress());
-            }
-            dataManager.save(uuid);
-        }
-        markLoggedIn(uuid);
-        onLoginSuccess(player);
-        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
     }
 
     /**
@@ -868,6 +961,8 @@ public final class AuthManager {
      */
     public void onLoginSuccess(Player player) {
         player.getScheduler().run(plugin, task -> {
+            // 立即隐藏提醒 BossBar（不等下一个提醒周期；非 bossbar 方式时为空操作）
+            plugin.getPlayerListener().hideReminderBar(player);
             // 仅对被设为旁观的玩家恢复游戏模式
             if (spectatorPending.remove(player.getUniqueId())) {
                 PlayerData data = dataManager.getPlayer(player.getUniqueId());

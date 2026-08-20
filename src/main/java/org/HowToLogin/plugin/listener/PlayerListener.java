@@ -2,6 +2,7 @@ package org.howtologin.plugin.listener;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
 import io.papermc.paper.event.player.AsyncPlayerSpawnLocationEvent;
+import org.bukkit.Bukkit;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
@@ -20,6 +21,9 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.*;
 
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 // AsyncPlayerSpawnLocationEvent 等 Paper API 标记为 @ApiStatus.Experimental，实际已稳定可用
 @SuppressWarnings("UnstableApiUsage")
@@ -27,6 +31,8 @@ public final class PlayerListener implements Listener {
 
     private final HTLogin plugin;
     private final AuthManager authManager;
+    // 活跃的提醒 BossBar：登录成功/玩家退出时立即隐藏（不等下一个任务周期）
+    private final Map<UUID, net.kyori.adventure.bossbar.BossBar> reminderBars = new ConcurrentHashMap<>();
 
     public PlayerListener(HTLogin plugin, AuthManager authManager) {
         this.plugin = plugin;
@@ -72,22 +78,21 @@ public final class PlayerListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
+        // 更新活跃时间（有账号即更新，用于不活跃清理；未注册玩家不写库）
+        authManager.touchActive(player);
+
         // 正版玩家免密登录：跳过密码验证，直接标记为已登录
         if (authManager.isPremium(player)) {
             // 正版验证失败回退进入的玩家：本次需密码登录，不自动免密
             if (authManager.isPremiumFallback(player.getUniqueId())) {
-                authManager.addPendingLogin(player);
-                authManager.setSpectator(player);
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
-                scheduleLoginTimeout(player);
-                scheduleReminder(player, true);
+                beginAuthFlow(player);
                 return;
             }
             // 先检查 IP 是否一致（决定是否需要传送）
             // IP 一致时 onSpawnLocation 已将出生点设为退出位置，无需传送
             // IP 不一致时需传送到退出位置
             boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
-            authManager.loginByPremium(player);
+            authManager.autoLogin(player);
             player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
             // 首次注册/升级正版账号：发送随机明文密码并提示修改
             String initialPassword = authManager.pollPremiumPassword(player.getUniqueId());
@@ -103,27 +108,35 @@ public final class PlayerListener implements Listener {
         if (authManager.hasAccount(player)) {
             // 尝试 IP 免密登录：上次登录 IP 与当前一致时自动登录
             if (authManager.checkIpAutoLogin(player)) {
-                authManager.loginByIp(player);
+                authManager.autoLogin(player);
                 player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
                 // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
                 return;
             }
-            authManager.addPendingLogin(player);
-            authManager.setSpectator(player);
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
-            scheduleLoginTimeout(player);
-            scheduleReminder(player, true);
-        } else {
-            authManager.setSpectator(player);
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
-            scheduleLoginTimeout(player);
-            scheduleReminder(player, false);
         }
+        beginAuthFlow(player);
+    }
+
+    /**
+     * 挂起玩家等待登录/注册：待登录状态、旁观模式、提示消息、超时与周期提醒。
+     * join 与 /reload 重挂起共用；有账号走登录流程，无账号走注册流程。
+     */
+    public void beginAuthFlow(Player player) {
+        boolean hasAccount = authManager.hasAccount(player);
+        if (hasAccount) {
+            authManager.addPendingLogin(player);
+        }
+        authManager.setSpectator(player);
+        player.sendMessage(HTLogin.legacy(I18n.get(
+                hasAccount ? "listener.please_login" : "listener.please_register", player)));
+        scheduleLoginTimeout(player);
+        scheduleReminder(player, hasAccount);
     }
 
     /**
      * 周期性重发登录/注册提示，防止玩家没看到。
      * 任务自管理：玩家登录/注册成功或下线后自动取消。
+     * 提示方式由 login.remind-method 配置：chat / title / actionbar / bossbar。
      * @param needsLogin true = 发送登录提示，false = 发送注册提示
      */
     public void scheduleReminder(Player player, boolean needsLogin) {
@@ -133,25 +146,66 @@ public final class PlayerListener implements Listener {
         // Paper 1.20+ 统一调度器 API，兼容 Folia
         player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
             if (!player.isOnline()) {
+                hideReminderBar(player);
                 scheduledTask.cancel();
                 return;
             }
-            if (needsLogin) {
-                // 已登录则停止提醒
-                if (authManager.isLoggedIn(player)) {
-                    scheduledTask.cancel();
-                    return;
-                }
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", player)));
-            } else {
-                // 已注册则停止提醒
-                if (authManager.hasAccount(player)) {
-                    scheduledTask.cancel();
-                    return;
-                }
-                player.sendMessage(HTLogin.legacy(I18n.get("listener.please_register", player)));
+            boolean done = needsLogin ? authManager.isLoggedIn(player) : authManager.hasAccount(player);
+            if (done) {
+                hideReminderBar(player);
+                scheduledTask.cancel();
+                return;
             }
+            sendReminder(player, needsLogin);
         }, null, periodTicks, periodTicks);
+    }
+
+    /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
+    private void sendReminder(Player player, boolean needsLogin) {
+        String key = needsLogin ? "listener.please_login" : "listener.please_register";
+        String method = plugin.getConfigManager().loginRemindMethod();
+        switch (method) {
+            case "title" -> player.showTitle(net.kyori.adventure.title.Title.title(
+                    HTLogin.legacy(I18n.get(key, player)),
+                    net.kyori.adventure.text.Component.empty(),
+                    net.kyori.adventure.title.Title.Times.times(
+                            java.time.Duration.ofMillis(500),
+                            java.time.Duration.ofMillis(2000),
+                            java.time.Duration.ofMillis(500))));
+            case "actionbar" -> player.sendActionBar(HTLogin.legacy(I18n.get(key, player)));
+            case "bossbar" -> {
+                net.kyori.adventure.bossbar.BossBar bar = reminderBars.get(player.getUniqueId());
+                if (bar == null) {
+                    net.kyori.adventure.text.Component text = HTLogin.legacy(I18n.get(key, player));
+                    bar = net.kyori.adventure.bossbar.BossBar.bossBar(
+                            text, 1.0f,
+                            net.kyori.adventure.bossbar.BossBar.Color.YELLOW,
+                            net.kyori.adventure.bossbar.BossBar.Overlay.PROGRESS);
+                    player.showBossBar(bar);
+                    reminderBars.put(player.getUniqueId(), bar);
+                } else {
+                    bar.name(HTLogin.legacy(I18n.get(key, player)));
+                }
+            }
+            default -> player.sendMessage(HTLogin.legacy(I18n.get(key, player)));
+        }
+    }
+
+    /** 隐藏并移除提醒 BossBar（登录成功、玩家退出、任务自检清理时调用；非 bossbar 方式时为空操作） */
+    public void hideReminderBar(Player player) {
+        net.kyori.adventure.bossbar.BossBar bar = reminderBars.remove(player.getUniqueId());
+        if (bar != null) {
+            player.hideBossBar(bar);
+        }
+    }
+
+    /** 清理所有提醒 BossBar（reload 切换提醒方式时调用，防止旧 BossBar 悬挂到玩家登录才消失） */
+    public void clearReminderBars() {
+        reminderBars.forEach((uuid, bar) -> {
+            Player player = Bukkit.getPlayer(uuid);
+            if (player != null) player.hideBossBar(bar);
+        });
+        reminderBars.clear();
     }
 
     /**
@@ -216,6 +270,8 @@ public final class PlayerListener implements Listener {
         if (authManager.isLoggedIn(player)) {
             authManager.saveLogoutLocation(player);
         }
+        // 立即清理提醒 BossBar：玩家调度器随退出 retired，任务内的清理分支不再执行
+        hideReminderBar(player);
         // 注销玩家退出时删除原版 .dat（服务器已保存并释放文件锁）
         authManager.tryDeletePlayerDataOnQuit(player.getUniqueId());
         authManager.clearSession(player);
@@ -352,6 +408,17 @@ public final class PlayerListener implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onInteract(PlayerInteractEvent event) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
+    // 禁止未登录的旁观玩家附身实体：附身后镜头跟随目标实体移动，可窥视他人位置（绕过坐标保护）。
+    // Paper 1.21.11 已移除 PlayerSpectateEntityEvent，附身改由 cause=SPECTATE 的传送事件表达
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onSpectateTeleport(PlayerTeleportEvent event) {
+        if (event.getCause() != PlayerTeleportEvent.TeleportCause.SPECTATE) return;
         if (plugin.getConfigManager().preventWorldInteraction()
                 && !authManager.isLoggedIn(event.getPlayer())) {
             event.setCancelled(true);

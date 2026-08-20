@@ -43,8 +43,8 @@ public final class PlayerDataManager {
 
     // REPLACE INTO 在 SQLite 与 MySQL 均支持：主键存在则先 DELETE 再 INSERT，否则直接 INSERT
     private static final String SQL_UPSERT =
-            "REPLACE INTO players (uuid, name, password_hash, ip, last_login, logout_location, premium, properties, game_mode) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            "REPLACE INTO players (uuid, name, password_hash, ip, last_login, logout_location, premium, properties, game_mode, totp_secret, last_active) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     private static final String SQL_DELETE = "DELETE FROM players WHERE uuid = ?";
     private static final String SQL_UPDATE_PASSWORD =
             "UPDATE players SET password_hash = ? WHERE uuid = ?";
@@ -117,6 +117,8 @@ public final class PlayerDataManager {
             addColumnIfMissing(stmt, conn, "premium", "BOOLEAN NOT NULL DEFAULT 0");
             addColumnIfMissing(stmt, conn, "properties", "TEXT");
             addColumnIfMissing(stmt, conn, "game_mode", "VARCHAR(16)");
+            addColumnIfMissing(stmt, conn, "totp_secret", "VARCHAR(64)");
+            addColumnIfMissing(stmt, conn, "last_active", "BIGINT NOT NULL DEFAULT 0");
         } catch (SQLException e) {
             plugin.getLogger().severe(I18n.get("log.init_table_failed", e.getMessage()));
         }
@@ -140,7 +142,7 @@ public final class PlayerDataManager {
         try (Connection conn = dataSource.getConnection();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(
-                     "SELECT uuid, name, password_hash, ip, last_login, logout_location, premium, properties, game_mode FROM players")) {
+                     "SELECT uuid, name, password_hash, ip, last_login, logout_location, premium, properties, game_mode, totp_secret, last_active FROM players")) {
             while (rs.next()) {
                 UUID uuid = UUID.fromString(rs.getString("uuid"));
                 PlayerData data = new PlayerData(
@@ -152,7 +154,9 @@ public final class PlayerDataManager {
                         rs.getString("logout_location"),
                         rs.getBoolean("premium"),
                         rs.getString("properties"),
-                        rs.getString("game_mode")
+                        rs.getString("game_mode"),
+                        rs.getString("totp_secret"),
+                        rs.getLong("last_active")
                 );
                 players.put(uuid, data);
                 if (data.premium() && data.name() != null) {
@@ -245,6 +249,8 @@ public final class PlayerDataManager {
         ps.setBoolean(7, data.premium());
         ps.setString(8, data.properties());
         ps.setString(9, data.gameMode());
+        ps.setString(10, data.totpSecret());
+        ps.setLong(11, data.lastActive());
     }
 
     /** 获取所有已注册玩家的 UUID 集合 */
@@ -269,7 +275,7 @@ public final class PlayerDataManager {
     }
 
     public void createPlayer(UUID uuid, String passwordHash, String ip) {
-        PlayerData data = new PlayerData(uuid, null, passwordHash, ip, System.currentTimeMillis() / 1000, null, false, null, null);
+        PlayerData data = new PlayerData(uuid, null, passwordHash, ip, System.currentTimeMillis() / 1000, null, false, null, null, null, 0);
         players.put(uuid, data);
         // 创建账号为关键操作：立即落库，避免崩溃丢新账号（区别于登录/退出等的周期批量 flush）
         saveNow(data);
@@ -300,7 +306,7 @@ public final class PlayerDataManager {
      * @return 随机生成的明文密码（用于首次进服提示玩家），null 表示未创建
      */
     public String createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
-        PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties, null);
+        PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties, null, null, 0);
         String plain = assignRandomPassword(data);
         players.put(uuid, data);
         if (name != null) {
@@ -353,7 +359,8 @@ public final class PlayerDataManager {
         }
         PlayerData premium = new PlayerData(premiumUuid, name, "",
                 ip != null && !ip.isEmpty() ? ip : offline.ip(),
-                System.currentTimeMillis() / 1000, offline.logoutLocation(), true, properties, offline.gameMode());
+                System.currentTimeMillis() / 1000, offline.logoutLocation(), true, properties, offline.gameMode(),
+                offline.totpSecret(), offline.lastActive());
         String plain = assignRandomPassword(premium);
         players.put(premiumUuid, premium);
         premiumNameIndex.put(name.toLowerCase(), premiumUuid);
@@ -409,6 +416,28 @@ public final class PlayerDataManager {
                 plugin.getLogger().severe(I18n.get("log.delete_player_failed", uuid, e.getMessage()));
             }
         });
+    }
+
+    /**
+     * 清理不活跃账号：删除超过 days 天未登录的非正版账号。
+     * 活跃时间取 lastActive 与 lastLogin 的较大者；两者均为 0 时无法判断活跃度，跳过以保护数据。
+     * 正版账号与在线玩家不受影响。同步执行（启动时调用，玩家尚未进入）。
+     * @return 清理的账号数量
+     */
+    public int purgeInactive(int days) {
+        long threshold = System.currentTimeMillis() / 1000 - days * 86400L;
+        List<UUID> toDelete = new ArrayList<>();
+        for (PlayerData data : players.values()) {
+            if (data.premium()) continue;
+            long activity = Math.max(data.lastActive(), data.lastLogin());
+            if (activity > 0 && activity < threshold) {
+                toDelete.add(data.uuid());
+            }
+        }
+        for (UUID uuid : toDelete) {
+            removePlayer(uuid);
+        }
+        return toDelete.size();
     }
 
     public void updatePassword(UUID uuid, String newHash) {
@@ -481,9 +510,14 @@ public final class PlayerDataManager {
         private volatile String properties;
         // 玩家上次已登录退出时的游戏模式（名称），用于登录后恢复
         private volatile String gameMode;
+        // 双因素认证 TOTP 密钥（Base32），null 表示未启用
+        private volatile String totpSecret;
+        // 最后活跃时间（epoch 秒）：登录成功时更新，用于清理不活跃账号
+        private volatile long lastActive;
 
         public PlayerData(UUID uuid, String name, String passwordHash, String ip, long lastLogin,
-                          String logoutLocation, boolean premium, String properties, String gameMode) {
+                          String logoutLocation, boolean premium, String properties, String gameMode,
+                          String totpSecret, long lastActive) {
             this.uuid = uuid;
             this.name = name;
             this.passwordHash = passwordHash;
@@ -493,6 +527,8 @@ public final class PlayerDataManager {
             this.premium = premium;
             this.properties = properties;
             this.gameMode = gameMode;
+            this.totpSecret = totpSecret;
+            this.lastActive = lastActive;
         }
 
         public UUID uuid() { return uuid; }
@@ -519,5 +555,11 @@ public final class PlayerDataManager {
 
         public String gameMode() { return gameMode; }
         public void gameMode(String gameMode) { this.gameMode = gameMode; }
+
+        public String totpSecret() { return totpSecret; }
+        public void totpSecret(String totpSecret) { this.totpSecret = totpSecret; }
+
+        public long lastActive() { return lastActive; }
+        public void lastActive(long lastActive) { this.lastActive = lastActive; }
     }
 }

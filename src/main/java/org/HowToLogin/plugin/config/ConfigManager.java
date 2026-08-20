@@ -46,6 +46,14 @@ public final class ConfigManager {
     private boolean ipAutoLoginEnabled;
     private int ipAutoLoginExpireMinutes;
     private int loginRemindInterval;
+    // 提示消息发送方式：chat / title / actionbar / bossbar
+    private String loginRemindMethod;
+    // IP 变动提醒：登录 IP 与上次不同时提示玩家
+    private boolean ipChangeNotifyEnabled;
+    // 双因素认证：全局开关（关闭后已绑定玩家跳过验证，密钥保留）
+    private boolean twoFactorEnabled;
+    // 双因素认证：认证器中显示的发行方名称（otpauth URI 的 issuer）
+    private String twoFactorIssuer;
 
     // 密码规则
     private int minPasswordLength;
@@ -81,6 +89,9 @@ public final class ConfigManager {
 
     // 通用设置
     private boolean realUnreg;
+    // 清理不活跃账号
+    private boolean purgeEnabled;
+    private int purgeDays;
 
     // 正版验证
     private boolean premiumEnabled;
@@ -183,15 +194,27 @@ public final class ConfigManager {
                 + "|" + mysqlDatabase + "|" + mysqlUsername + "|" + mysqlPassword + "|" + poolSize;
 
         // 登录设置
-        this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 60), 0);
+        this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 120), 0);
         this.kickOnTimeout = config.getBoolean("login.kick-on-timeout", true);
         this.failProtectionEnabled = config.getBoolean("login.fail-protection.enabled", true);
         this.failMaxAttempts = clampInt("login.fail-protection.max-attempts", config.getInt("login.fail-protection.max-attempts", 3), 1);
         this.failKickDuration = clampInt("login.fail-protection.kick-duration", config.getInt("login.fail-protection.kick-duration", 60), 0);
         this.failProtectionResetSeconds = clampInt("login.fail-protection.reset-seconds", config.getInt("login.fail-protection.reset-seconds", 300), 0);
         this.ipAutoLoginEnabled = config.getBoolean("login.ip-auto-login.enabled", true);
-        this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 720), 0);
+        this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 120), 0);
         this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
+        this.loginRemindMethod = config.getString("login.remind-method", "chat").toLowerCase(Locale.ROOT);
+        // 提示方式校验：仅支持 chat/title/actionbar/bossbar，非法值回退为 chat
+        if (!List.of("chat", "title", "actionbar", "bossbar").contains(this.loginRemindMethod)) {
+            plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "login.remind-method", this.loginRemindMethod, "chat"));
+            this.loginRemindMethod = "chat";
+            config.set("login.remind-method", "chat");
+            configDirty = true;
+        }
+        this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify.enabled", true);
+        // 双因素认证
+        this.twoFactorEnabled = config.getBoolean("2fa.enabled", true);
+        this.twoFactorIssuer = config.getString("2fa.issuer", "HTLogin");
 
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
@@ -231,7 +254,7 @@ public final class ConfigManager {
         }
 
         // 注册限制
-        this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip", config.getInt("register.max-accounts-per-ip", 0), 0);
+        this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip", config.getInt("register.max-accounts-per-ip", 3), 0);
 
         // 行为限制
         this.preventMove = config.getBoolean("prevent.move", true);
@@ -255,6 +278,8 @@ public final class ConfigManager {
         if (!"random".equals(this.protectionPosMode) && !"fixed".equals(this.protectionPosMode)) {
             plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "protection.pos.mode", this.protectionPosMode, "random"));
             this.protectionPosMode = "random";
+            config.set("protection.pos.mode", "random");
+            configDirty = true;
         }
         this.protectionPosSpawnRadius = clampInt("protection.pos.spawn-radius", config.getInt("protection.pos.spawn-radius", 10), 1);
         this.protectionPosFixedX = config.getDouble("protection.pos.fixed.x", 0);
@@ -270,6 +295,8 @@ public final class ConfigManager {
         this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", false);
 
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
+        this.purgeEnabled = config.getBoolean("settings.purge.enabled", false);
+        this.purgeDays = clampInt("settings.purge.days", config.getInt("settings.purge.days", 90), 1);
 
         // 正版验证
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
@@ -391,6 +418,10 @@ public final class ConfigManager {
     public boolean ipAutoLoginEnabled() { return ipAutoLoginEnabled; }
     public int ipAutoLoginExpireMinutes() { return ipAutoLoginExpireMinutes; }
     public int loginRemindInterval() { return loginRemindInterval; }
+    public String loginRemindMethod() { return loginRemindMethod; }
+    public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
+    public boolean twoFactorEnabled() { return twoFactorEnabled; }
+    public String twoFactorIssuer() { return twoFactorIssuer; }
 
     // 密码规则
     public int minPasswordLength() { return minPasswordLength; }
@@ -429,6 +460,8 @@ public final class ConfigManager {
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }
+    public boolean purgeEnabled() { return purgeEnabled; }
+    public int purgeDays() { return purgeDays; }
 
     // 正版验证
     public boolean premiumEnabled() { return premiumEnabled; }

@@ -40,26 +40,23 @@ public final class LoginCommand implements BasicCommand {
             return;
         }
 
-        // 踢出期检查：优先于密码验证
-        if (authManager.isKicked(player)) {
-            long remaining = authManager.getKickRemaining(player);
-            player.kick(HTLogin.legacy(I18n.get("login.kicked", remaining)));
-            return;
-        }
-
         // 异步登录：bcrypt 校验在异步线程执行，回调回到玩家区域线程处理结果
-        authManager.loginAsync(player, args[0], (success, kickSeconds) -> {
-            if (success) {
-                player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
-                // 登录成功后传送回上次退出位置（启用坐标保护时生效）
-                authManager.returnToLogoutLocation(player);
-            } else {
-                if (authManager.isKicked(player)) {
-                    // 这次失败达到上限，触发踢出
-                    long remaining = authManager.getKickRemaining(player);
-                    player.kick(HTLogin.legacy(I18n.get("login.kicked", remaining)));
-                } else {
-                    player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
+        // 踢出期检查已包含在 loginAsync 的轻量检查中，FAILED 回调的 kickSeconds > 0 即踢出
+        authManager.loginAsync(player, args[0], (result, kickSeconds) -> {
+            switch (result) {
+                case SUCCESS -> {
+                    player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
+                    // 登录成功后传送回上次退出位置（启用坐标保护时生效）
+                    authManager.returnToLogoutLocation(player);
+                }
+                case NEED_2FA -> player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                case FAILED -> {
+                    if (kickSeconds != null && kickSeconds > 0) {
+                        // 踢出期内（本次失败达到上限触发）
+                        player.kick(HTLogin.legacy(I18n.get("login.kicked", kickSeconds)));
+                    } else {
+                        player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
+                    }
                 }
             }
         });
