@@ -25,21 +25,20 @@ public final class PasswordHash {
 
     private static final int SALT_LENGTH = 16;
     private static final String SHA256_ALGORITHM = "SHA-256";
-    // BCrypt work factor：10 约 100ms/次（现代 CPU），兼顾安全与登录响应
-    private static final int BCRYPT_COST = 10;
     // 随机密码字符集：数字 + 大小写字母（62 个字符）
     private static final char[] RANDOM_ALPHABET =
             "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".toCharArray();
 
     /**
-     * 使用指定算法哈希密码。
-     * @param password 明文密码
-     * @param algorithm "bcrypt" 或 "sha256"（不区分大小写）
+     * 使用指定算法和 work factor 哈希密码。
+     * @param password   明文密码
+     * @param algorithm  "bcrypt" 或 "sha256"（不区分大小写）
+     * @param bcryptCost BCrypt work factor（4-31），仅 algorithm 为 bcrypt 时有效
      * @return 哈希字符串
      */
-    public static String hashPassword(String password, String algorithm) {
+    public static String hashPassword(String password, String algorithm, int bcryptCost) {
         if ("bcrypt".equalsIgnoreCase(algorithm)) {
-            return BCrypt.hashpw(password, BCrypt.gensalt(BCRYPT_COST));
+            return BCrypt.hashpw(password, BCrypt.gensalt(bcryptCost));
         }
         return hashSha256(password);
     }

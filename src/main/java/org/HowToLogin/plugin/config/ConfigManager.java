@@ -59,6 +59,7 @@ public final class ConfigManager {
     private int minPasswordLength;
     private int maxPasswordLength;
     private String passwordHashAlgorithm;
+    private int bcryptCost;
     private Pattern passwordPattern;
 
     // 注册限制
@@ -240,6 +241,8 @@ public final class ConfigManager {
             plugin.getLogger().warning(I18n.get("log.config_hash_invalid", this.passwordHashAlgorithm, "bcrypt"));
             this.passwordHashAlgorithm = "bcrypt";
         }
+        // BCrypt work factor：钳制 4-31 有效范围，越界时回写配置文件
+        this.bcryptCost = clampRange("password.hash-cost", config.getInt("password.hash-cost", 12), 4, 31);
         // 密码字符规则：正则表达式，为空表示不限制
         String patternStr = config.getString("password.pattern", "");
         if (patternStr.isBlank()) {
@@ -427,6 +430,7 @@ public final class ConfigManager {
     public int minPasswordLength() { return minPasswordLength; }
     public int maxPasswordLength() { return maxPasswordLength; }
     public String passwordHashAlgorithm() { return passwordHashAlgorithm; }
+    public int bcryptCost() { return bcryptCost; }
     /** 密码正则规则，null 表示不限制 */
     public Pattern passwordPattern() { return passwordPattern; }
 

@@ -297,7 +297,7 @@ public final class PlayerDataManager {
      */
     private String assignRandomPassword(PlayerData data) {
         String plain = PasswordHash.generateRandomPassword(16);
-        data.passwordHash(PasswordHash.hashPassword(plain, plugin.getConfigManager().passwordHashAlgorithm()));
+        data.passwordHash(PasswordHash.hashPassword(plain, plugin.getConfigManager().passwordHashAlgorithm(), plugin.getConfigManager().bcryptCost()));
         return plain;
     }
 

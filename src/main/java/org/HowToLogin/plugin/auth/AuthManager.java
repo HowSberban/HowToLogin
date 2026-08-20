@@ -132,7 +132,7 @@ public final class AuthManager {
         if (dataManager.hasAccount(uuid)) {
             return false;
         }
-        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm());
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
         markLoggedIn(uuid);
         onLoginSuccess(player);
@@ -147,7 +147,7 @@ public final class AuthManager {
      */
     public boolean forceRegister(UUID uuid, String password) {
         if (dataManager.hasAccount(uuid)) return false;
-        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm());
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         Player online = Bukkit.getPlayer(uuid);
         String ip = "unknown";
         if (online != null && online.getAddress() != null) {
@@ -213,7 +213,7 @@ public final class AuthManager {
         boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
         boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
         if (configIsBcrypt != storedIsBcrypt) {
-            data.passwordHash(PasswordHash.hashPassword(password, configured));
+            data.passwordHash(PasswordHash.hashPassword(password, configured, configManager.bcryptCost()));
         }
     }
 
@@ -373,7 +373,7 @@ public final class AuthManager {
     /** 强制修改玩家密码（无需验证旧密码，玩家无需在线） */
     public boolean forceChangePassword(UUID uuid, String newPassword) {
         if (!dataManager.hasAccount(uuid)) return false;
-        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
+        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         dataManager.updatePassword(uuid, newHash);
         // 清除 lastLogin 使 IP 自动登录立即失效，强制下次必须用密码登录
         PlayerData data = dataManager.getPlayer(uuid);
@@ -439,7 +439,7 @@ public final class AuthManager {
         if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
             return false;
         }
-        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm());
+        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         dataManager.updatePassword(uuid, newHash);
         return true;
     }
