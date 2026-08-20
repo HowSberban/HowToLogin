@@ -9,6 +9,7 @@ import com.mojang.brigadier.tree.LiteralCommandNode;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.auth.PasswordValidator;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
@@ -123,8 +124,8 @@ public final class HTLoginCommand {
         boolean dbChanged = plugin.getConfigManager().reload();
         I18n.reload();
         plugin.getAuthManager().cleanupExpiredStates();
-        // 提醒方式可能被切换：清理现有 BossBar，未登录玩家下个周期按新方式重新提醒
-        plugin.getPlayerListener().clearReminderBars();
+        // 登录界面方式可能被切换：清理现有 BossBar，重新挂起未登录玩家（关闭旧 Dialog，按新配置展示）
+        plugin.getPlayerListener().refreshPendingPlayers();
         if (dbChanged) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));
             plugin.getLogger().warning(I18n.get("htlogin.reload_db_changed"));

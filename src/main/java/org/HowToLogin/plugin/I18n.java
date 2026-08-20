@@ -269,6 +269,11 @@ public final class I18n {
         return format(get(key, sender), args);
     }
 
+    /** 按指定语言获取消息并填充参数（无 Player 对象的场景，如配置阶段 Dialog）；locale 为 null 时用默认语言 */
+    public static String getForLocale(String key, String locale, Object... args) {
+        return format(getByLocale(key, locale == null ? defaultLocale : locale), args);
+    }
+
     // ===== 内部方法 =====
 
     /** 按 locale 查找消息（精确匹配失败回退到默认语言） */

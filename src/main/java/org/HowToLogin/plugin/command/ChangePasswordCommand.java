@@ -5,6 +5,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.auth.PasswordValidator;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -40,8 +41,7 @@ public final class ChangePasswordCommand implements BasicCommand {
         String oldPassword = args[0];
         String newPassword = args[1];
 
-        if (PasswordValidator.invalidLength(plugin, player, newPassword)) return;
-        if (PasswordValidator.invalidPattern(plugin, player, newPassword)) return;
+        if (PasswordValidator.invalid(plugin, player, newPassword)) return;
 
         if (authManager.changePassword(player, oldPassword, newPassword)) {
             player.sendMessage(HTLogin.legacy(I18n.get("changepw.success", player)));

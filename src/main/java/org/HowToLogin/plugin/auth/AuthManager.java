@@ -10,6 +10,7 @@ import org.howtologin.plugin.api.event.HTLoginUnregisterEvent;
 import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
+import org.howtologin.plugin.dialog.DialogManager;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -158,6 +159,14 @@ public final class AuthManager {
         return true;
     }
 
+    /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理 */
+    public boolean registerConfig(UUID uuid, String password, String ip) {
+        if (dataManager.hasAccount(uuid)) return false;
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+        dataManager.createPlayer(uuid, hash, ip != null ? ip : "unknown");
+        return true;
+    }
+
     // Login
     /**
      * 异步登录：bcrypt 密码校验在异步线程执行（约 100ms，避免阻塞服务端 tick），
@@ -188,7 +197,7 @@ public final class AuthManager {
             player.getScheduler().run(plugin, task2 -> {
                 verifying.remove(uuid);
                 if (!ok) {
-                    handleLoginFailure(player);
+                    handleLoginFailure(uuid, player);
                     done.accept(LoginResult.FAILED, isKicked(player) ? getKickRemaining(player) : 0L);
                 } else {
                     // 密码算法对齐（密码明文仅此处可用，须在进入 2FA 等待前完成）
@@ -204,6 +213,42 @@ public final class AuthManager {
                     }
                 }
             }, null);
+        });
+    }
+
+    /**
+     * 配置阶段异步登录（Pre-join Dialog，无 Player 实体）：
+     * bcrypt 校验在异步线程执行，回调也在异步线程（调用方仅做线程安全操作：重弹窗口/断连/闭锁）。
+     * 成功不立即完成登录——登录收尾（IP/时间更新、事件）延迟到玩家进入世界时由 finishPreJoinLogin 处理。
+     * @param done 回调（异步线程调用）：参数 1 登录结果；参数 2 失败时的剩余踢出秒数
+     */
+    public void loginConfigAsync(UUID uuid, String password, BiConsumer<LoginResult, Long> done) {
+        if (isKicked(uuid)) {
+            done.accept(LoginResult.FAILED, getKickRemaining(uuid));
+            return;
+        }
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) {
+            done.accept(LoginResult.FAILED, 0L);
+            return;
+        }
+        // 注意：此处不复用 loginAsync 的 verifying 重入保护。pre-join 窗口提交后即关闭（串行），
+        // 不会并发双提交；且若重入直接 return 不回调 done，会导致配置线程永久阻塞（连接卡死）。
+        final PlayerData snapshot = data;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            boolean ok = PasswordHash.checkPassword(password, snapshot.passwordHash());
+            if (!ok) {
+                handleLoginFailure(uuid, null);
+                done.accept(LoginResult.FAILED, isKicked(uuid) ? getKickRemaining(uuid) : 0L);
+            } else {
+                alignPasswordHash(snapshot, password);
+                if (snapshot.totpSecret() != null && configManager.twoFactorEnabled()) {
+                    pending2fa.add(uuid);
+                    done.accept(LoginResult.NEED_2FA, 0L);
+                } else {
+                    done.accept(LoginResult.SUCCESS, 0L);
+                }
+            }
         });
     }
 
@@ -272,6 +317,18 @@ public final class AuthManager {
         return true;
     }
 
+    /** 配置阶段完成双因素验证（Pre-join Dialog）：通过则由调用方放行（登录收尾延迟到进入世界时），失败回到待验证状态 */
+    public boolean verify2faConfig(UUID uuid, String code) {
+        if (!pending2fa.remove(uuid)) return false;
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null || data.totpSecret() == null) return false;
+        if (!Totp.verifyCode(data.totpSecret(), code)) {
+            pending2fa.add(uuid);
+            return false;
+        }
+        return true;
+    }
+
     /** 开始双因素设置：生成临时密钥（confirm 通过后才持久化），返回给玩家添加到认证器应用 */
     public String setup2fa(Player player) {
         UUID uuid = player.getUniqueId();
@@ -317,9 +374,8 @@ public final class AuthManager {
         dataManager.save(player.getUniqueId());
     }
 
-    /** 登录失败处理：失败计数（可能触发踢出）+ 触发失败事件（须在玩家区域线程调用） */
-    private void handleLoginFailure(Player player) {
-        UUID uuid = player.getUniqueId();
+    /** 登录失败处理：失败计数（可能触发踢出）+ 触发失败事件（须在玩家区域线程调用；配置阶段 player 为 null，事件转全局调度器触发） */
+    private void handleLoginFailure(UUID uuid, Player player) {
         // 增加计数（仅在启用失败保护时）
         if (configManager.failProtectionEnabled()) {
             long now = System.currentTimeMillis();
@@ -351,7 +407,13 @@ public final class AuthManager {
                 }
             }
         }
-        Bukkit.getPluginManager().callEvent(new HTLoginLoginFailEvent(player, HTLoginLoginFailEvent.Reason.WRONG_PASSWORD));
+        HTLoginLoginFailEvent event = new HTLoginLoginFailEvent(player, HTLoginLoginFailEvent.Reason.WRONG_PASSWORD);
+        if (player != null) {
+            Bukkit.getPluginManager().callEvent(event);
+        } else {
+            // 配置阶段无 Player：异步线程不能直接触发同步事件，转全局区域调度器
+            Bukkit.getGlobalRegionScheduler().run(plugin, task -> Bukkit.getPluginManager().callEvent(event));
+        }
     }
 
     // ===== 管理员强制操作 =====
@@ -422,6 +484,33 @@ public final class AuthManager {
         if (data != null) {
             completeLogin(player, data);
         }
+    }
+
+    // ===== Pre-join Dialog 收尾（配置阶段认证后，玩家进入世界时调用） =====
+
+    /**
+     * Pre-join 认证完成后玩家进入世界时的登录收尾：completeLogin 全流程
+     * （IP/时间更新、标记登录、清理回退标记、恢复物品、触发登录事件、IP 变动提醒）。
+     * @return false 表示账号数据已不存在（被注销的竞态），调用方应回退正常登录流程
+     */
+    public boolean finishPreJoinLogin(Player player) {
+        PlayerData data = dataManager.getPlayer(player.getUniqueId());
+        if (data == null) return false;
+        completeLogin(player, data);
+        return true;
+    }
+
+    /**
+     * Pre-join 注册完成后玩家进入世界时的收尾：与 register() 的登录后处理一致
+     * （标记登录、恢复物品状态、触发注册事件；不更新登录时间/IP——createPlayer 已记录）。
+     * @return false 表示账号数据已不存在（被注销的竞态），调用方应回退正常登录流程
+     */
+    public boolean finishPreJoinRegister(Player player) {
+        if (!dataManager.hasAccount(player.getUniqueId())) return false;
+        markLoggedIn(player.getUniqueId());
+        onLoginSuccess(player);
+        Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(player.getUniqueId(), player));
+        return true;
     }
 
     // Logout
@@ -963,6 +1052,11 @@ public final class AuthManager {
         player.getScheduler().run(plugin, task -> {
             // 立即隐藏提醒 BossBar（不等下一个提醒周期；非 bossbar 方式时为空操作）
             plugin.getPlayerListener().hideReminderBar(player);
+            // 关闭可能仍打开的登录 Dialog（聊天命令登录、管理员强制登录等旁路场景；未打开时无效果）
+            DialogManager dialog = plugin.getDialogManager();
+            if (dialog != null) {
+                dialog.close(player);
+            }
             // 仅对被设为旁观的玩家恢复游戏模式
             if (spectatorPending.remove(player.getUniqueId())) {
                 PlayerData data = dataManager.getPlayer(player.getUniqueId());

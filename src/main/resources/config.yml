@@ -44,6 +44,16 @@ login:
   remind-interval: 5
   # 提示消息发送方式：chat（聊天栏）/ title（标题）/ actionbar（动作栏）/ bossbar（Boss 栏）
   remind-method: chat
+  # 登录窗口（1.21.6+）：弹出图形化窗口登录/注册，替代聊天栏提示与周期提醒
+  # 窗口不可用 ESC 关闭，密码错误等信息直接显示在窗口内
+  # 弹出时机：
+  #   pre-join：进入世界前（配置阶段）完成登录，登录前客户端不接收任何世界信息，无需坐标保护
+  #   post-join：进入世界后弹出（窗口压暗背景但周围仍可见世界，建议同时开启坐标保护）
+  # 客户端低于 1.21.6 或服务端不支持时自动回退：pre-join 回退 post-join，post-join 回退聊天栏
+  # 注意：ViaVersion/ViaBackwards 等协议翻译层可能使 pre-join 的版本检测失准，此类环境建议 post-join
+  dialog:
+    enabled: false
+    mode: pre-join
   # IP 变动提醒：登录 IP 与上次不同时提示玩家（首次登录不提醒）
   ip-change-notify:
     enabled: true

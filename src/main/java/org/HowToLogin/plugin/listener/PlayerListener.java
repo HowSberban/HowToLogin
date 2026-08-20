@@ -2,10 +2,13 @@ package org.howtologin.plugin.listener;
 
 import io.papermc.paper.event.player.AsyncChatEvent;
 import io.papermc.paper.event.player.AsyncPlayerSpawnLocationEvent;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.bukkit.Bukkit;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.dialog.DialogManager;
+import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -33,6 +36,8 @@ public final class PlayerListener implements Listener {
     private final AuthManager authManager;
     // 活跃的提醒 BossBar：登录成功/玩家退出时立即隐藏（不等下一个任务周期）
     private final Map<UUID, net.kyori.adventure.bossbar.BossBar> reminderBars = new ConcurrentHashMap<>();
+    // 活跃的提醒任务：重新挂起（reload）时取消旧任务，避免新旧任务并行重复提醒
+    private final Map<UUID, ScheduledTask> reminderTasks = new ConcurrentHashMap<>();
 
     public PlayerListener(HTLogin plugin, AuthManager authManager) {
         this.plugin = plugin;
@@ -81,6 +86,20 @@ public final class PlayerListener implements Listener {
         // 更新活跃时间（有账号即更新，用于不活跃清理；未注册玩家不写库）
         authManager.touchActive(player);
 
+        // Pre-join Dialog 已在配置阶段完成登录/注册：收尾后直接进入世界（无需挂起）
+        PreJoinAuthListener preJoin = plugin.getPreJoinAuthListener();
+        if (preJoin != null) {
+            PreJoinAuthListener.AuthOutcome outcome = preJoin.consume(player);
+            if (outcome != null) {
+                boolean login = outcome == PreJoinAuthListener.AuthOutcome.LOGIN;
+                if (login ? authManager.finishPreJoinLogin(player) : authManager.finishPreJoinRegister(player)) {
+                    player.sendMessage(HTLogin.legacy(I18n.get(login ? "login.success" : "register.success", player)));
+                    return;
+                }
+                // 账号在配置阶段认证后被删除（竞态）：走正常挂起流程
+            }
+        }
+
         // 正版玩家免密登录：跳过密码验证，直接标记为已登录
         if (authManager.isPremium(player)) {
             // 正版验证失败回退进入的玩家：本次需密码登录，不自动免密
@@ -118,8 +137,9 @@ public final class PlayerListener implements Listener {
     }
 
     /**
-     * 挂起玩家等待登录/注册：待登录状态、旁观模式、提示消息、超时与周期提醒。
+     * 挂起玩家等待登录/注册：待登录状态、旁观模式、登录界面、超时与周期提醒。
      * join 与 /reload 重挂起共用；有账号走登录流程，无账号走注册流程。
+     * Dialog 可用时弹出图形窗口（窗口常驻直到登录，无需周期提醒），否则回退聊天栏提示。
      */
     public void beginAuthFlow(Player player) {
         boolean hasAccount = authManager.hasAccount(player);
@@ -127,10 +147,13 @@ public final class PlayerListener implements Listener {
             authManager.addPendingLogin(player);
         }
         authManager.setSpectator(player);
-        player.sendMessage(HTLogin.legacy(I18n.get(
-                hasAccount ? "listener.please_login" : "listener.please_register", player)));
+        DialogManager dialog = plugin.getDialogManager();
+        if (dialog == null || !dialog.tryShowAuth(player, hasAccount)) {
+            player.sendMessage(HTLogin.legacy(I18n.get(
+                    hasAccount ? "listener.please_login" : "listener.please_register", player)));
+            scheduleReminder(player, hasAccount);
+        }
         scheduleLoginTimeout(player);
-        scheduleReminder(player, hasAccount);
     }
 
     /**
@@ -143,21 +166,27 @@ public final class PlayerListener implements Listener {
         int interval = plugin.getConfigManager().loginRemindInterval();
         if (interval <= 0) return;
         long periodTicks = interval * 20L;
+        UUID uuid = player.getUniqueId();
+        // 取消旧提醒任务（refreshPendingPlayers 重新挂起时避免新旧任务并行重复提醒）
+        ScheduledTask old = reminderTasks.remove(uuid);
+        if (old != null) old.cancel();
         // Paper 1.20+ 统一调度器 API，兼容 Folia
-        player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
+        reminderTasks.put(uuid, player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
             if (!player.isOnline()) {
+                reminderTasks.remove(uuid);
                 hideReminderBar(player);
                 scheduledTask.cancel();
                 return;
             }
             boolean done = needsLogin ? authManager.isLoggedIn(player) : authManager.hasAccount(player);
             if (done) {
+                reminderTasks.remove(uuid);
                 hideReminderBar(player);
                 scheduledTask.cancel();
                 return;
             }
             sendReminder(player, needsLogin);
-        }, null, periodTicks, periodTicks);
+        }, null, periodTicks, periodTicks));
     }
 
     /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
@@ -199,13 +228,30 @@ public final class PlayerListener implements Listener {
         }
     }
 
-    /** 清理所有提醒 BossBar（reload 切换提醒方式时调用，防止旧 BossBar 悬挂到玩家登录才消失） */
-    public void clearReminderBars() {
+    /** 清理所有提醒 BossBar（refreshPendingPlayers 重新挂起前调用，防止旧 BossBar 悬挂到玩家登录才消失） */
+    private void clearReminderBars() {
         reminderBars.forEach((uuid, bar) -> {
             Player player = Bukkit.getPlayer(uuid);
             if (player != null) player.hideBossBar(bar);
         });
         reminderBars.clear();
+    }
+
+    /**
+     * 配置热重载后重新挂起未登录玩家：关闭旧 Dialog、清理旧提醒，
+     * 按新配置重新展示（Dialog 开关与提醒方式切换即时生效）。
+     * 逐玩家切回其区域线程执行（Folia：管理员与目标玩家可能不在同一区域线程）。
+     */
+    public void refreshPendingPlayers() {
+        clearReminderBars();
+        DialogManager dialog = plugin.getDialogManager();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (authManager.isLoggedIn(player)) continue;
+            player.getScheduler().run(plugin, task -> {
+                if (dialog != null) dialog.close(player);
+                beginAuthFlow(player);
+            }, null);
+        }
     }
 
     /**
@@ -231,6 +277,17 @@ public final class PlayerListener implements Listener {
                 event.setSpawnLocation(logoutLoc);
                 return;
             }
+        }
+
+        // Pre-join 已认证玩家：与 IP 免密登录一致，直接在退出位置出生，避免随机出生后再传送
+        PreJoinAuthListener preJoin = plugin.getPreJoinAuthListener();
+        if (uuid != null && preJoin != null && preJoin.hasCompleted(uuid)) {
+            Location logoutLoc = authManager.getLogoutLocation(uuid);
+            if (logoutLoc != null) {
+                event.setSpawnLocation(logoutLoc);
+            }
+            // 已认证：登录前未接收任何世界信息，无需坐标保护
+            return;
         }
 
         // 启用坐标保护：强制主世界随机位置，防止坐标泄露
@@ -272,6 +329,8 @@ public final class PlayerListener implements Listener {
         }
         // 立即清理提醒 BossBar：玩家调度器随退出 retired，任务内的清理分支不再执行
         hideReminderBar(player);
+        // 清理提醒任务引用（任务随玩家调度器 retired 不再执行，防止 Map 残留）
+        reminderTasks.remove(player.getUniqueId());
         // 注销玩家退出时删除原版 .dat（服务器已保存并释放文件锁）
         authManager.tryDeletePlayerDataOnQuit(player.getUniqueId());
         authManager.clearSession(player);

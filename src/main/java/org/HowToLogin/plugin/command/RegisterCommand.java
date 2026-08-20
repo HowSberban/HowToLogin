@@ -5,6 +5,7 @@ import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.auth.PasswordValidator;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -45,8 +46,7 @@ public final class RegisterCommand implements BasicCommand {
             return;
         }
 
-        if (PasswordValidator.invalidLength(plugin, player, password)) return;
-        if (PasswordValidator.invalidPattern(plugin, player, password)) return;
+        if (PasswordValidator.invalid(plugin, player, password)) return;
 
         if (authManager.register(player, password)) {
             player.sendMessage(HTLogin.legacy(I18n.get("register.success", player)));
