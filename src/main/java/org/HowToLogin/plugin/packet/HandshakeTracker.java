@@ -12,10 +12,10 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 握手协议版本追踪：按远程地址记录每个连接的客户端协议版本。
- * Pre-join Dialog 需要据此判断客户端是否支持 Dialog（1.21.6+）：
- * 旧客户端收到配置阶段 Show Dialog 包会因无法解析而断连，必须回退聊天栏提示流程。
- * 注意：ViaVersion 等协议翻译层可能改写握手版本号，此类环境下需依赖原始协议号比较（见 supportsDialogs）。
+ * 握手协议版本追踪：按远程地址记录客户端协议版本。
+ * Pre-join Dialog 据此判断客户端是否支持 Dialog（1.21.6+）：旧客户端收到配置阶段
+ * Show Dialog 包会无法解析而断连，必须回退聊天栏提示流程。
+ * 注意：ViaVersion 等协议翻译层可能改写握手版本号，此类环境依赖原始协议号比较（见 supportsDialogs）。
  */
 public final class HandshakeTracker extends PacketListenerAbstract {
 
@@ -36,7 +36,7 @@ public final class HandshakeTracker extends PacketListenerAbstract {
             var wrapper = new WrapperHandshakingClientHandshake(event);
             // 仅记录登录意图（status ping 不进入配置阶段，无需记录）
             if (wrapper.getIntention() != WrapperHandshakingClientHandshake.ConnectionIntention.LOGIN) return;
-            if (!(event.getSocketAddress() instanceof InetSocketAddress address)) return;
+            InetSocketAddress address = event.getSocketAddress();
             // 容量守卫：超限时清理过期条目（连接通常几秒内完成握手→配置，60 秒足够宽裕）
             if (versions.size() > CAP) {
                 long now = System.currentTimeMillis();

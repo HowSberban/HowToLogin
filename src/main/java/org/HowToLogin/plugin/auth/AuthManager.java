@@ -127,13 +127,22 @@ public final class AuthManager {
     }
 
     // Registration
-    public boolean register(Player player, String password) {
-        UUID uuid = player.getUniqueId();
+    /** 若账号不存在则创建（哈希+写库）。register/forceRegister/registerConfig 复用；ip 可为 null（记为 "unknown"） */
+    private boolean createAccount(UUID uuid, String password, String ip) {
         if (dataManager.hasAccount(uuid)) {
             return false;
         }
         String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
-        dataManager.createPlayer(uuid, hash, player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : "unknown");
+        dataManager.createPlayer(uuid, hash, ip != null ? ip : "unknown");
+        return true;
+    }
+
+    public boolean register(Player player, String password) {
+        UUID uuid = player.getUniqueId();
+        String ip = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
+        if (!createAccount(uuid, password, ip)) {
+            return false;
+        }
         markLoggedIn(uuid);
         onLoginSuccess(player);
         Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, player));
@@ -146,24 +155,17 @@ public final class AuthManager {
      * 不会自动登录，玩家需自行 /login。
      */
     public boolean forceRegister(UUID uuid, String password) {
-        if (dataManager.hasAccount(uuid)) return false;
-        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         Player online = Bukkit.getPlayer(uuid);
-        String ip = "unknown";
-        if (online != null && online.getAddress() != null) {
-            ip = online.getAddress().getAddress().getHostAddress();
-        }
-        dataManager.createPlayer(uuid, hash, ip);
+        String ip = online != null && online.getAddress() != null
+                ? online.getAddress().getAddress().getHostAddress() : null;
+        if (!createAccount(uuid, password, ip)) return false;
         Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, online));
         return true;
     }
 
     /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理 */
     public boolean registerConfig(UUID uuid, String password, String ip) {
-        if (dataManager.hasAccount(uuid)) return false;
-        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
-        dataManager.createPlayer(uuid, hash, ip != null ? ip : "unknown");
-        return true;
+        return createAccount(uuid, password, ip);
     }
 
     // Login
@@ -294,6 +296,8 @@ public final class AuthManager {
     }
 
     /** 玩家是否处于双因素待验证状态（密码已通过，TOTP 未完成） */
+    // 调用方均为取反使用（!isPending2fa 判断"无需 2FA"），方法语义保持正向便于阅读
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     public boolean isPending2fa(UUID uuid) {
         return pending2fa.contains(uuid);
     }

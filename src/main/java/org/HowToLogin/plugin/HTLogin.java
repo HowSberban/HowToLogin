@@ -32,12 +32,8 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
-    // Dialog 登录界面（1.21.6+）：服务端不支持时为 null，自动回退聊天栏提示
-    private DialogManager dialogManager;
     // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退聊天栏提示
     private PreJoinAuthListener preJoinAuthListener;
-    // 握手协议版本追踪（pre-join 判断客户端是否支持配置阶段 Dialog）
-    private HandshakeTracker handshakeTracker;
     // 正版验证异步组件（线程池管理等，禁用时回收）
     private MojangClient mojangClient;
     private PlayerInjector playerInjector;
@@ -53,10 +49,10 @@ public final class HTLogin extends JavaPlugin {
         this.authManager = new AuthManager(this, playerDataManager, configManager);
         // Dialog 登录界面：仅服务端支持（1.21.11+）时实例化，未实例化时回退聊天栏提示
         if (DialogManager.isSupported()) {
-            this.dialogManager = new DialogManager(this);
+            DialogManager dialogManager = new DialogManager(this);
             // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则回退聊天栏提示
             if (preJoinSupported()) {
-                this.handshakeTracker = new HandshakeTracker();
+                HandshakeTracker handshakeTracker = new HandshakeTracker();
                 PacketEvents.getAPI().getEventManager().registerListener(handshakeTracker);
                 this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager, handshakeTracker);
                 getServer().getPluginManager().registerEvents(preJoinAuthListener, this);

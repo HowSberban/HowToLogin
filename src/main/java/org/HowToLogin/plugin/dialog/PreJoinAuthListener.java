@@ -23,16 +23,9 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Pre-join Dialog 登录（Paper 配置阶段事件，1.21.6+）：
- * 玩家进入世界前弹出登录/注册窗口，认证完成才放行进入世界——
- * 登录前客户端不接收任何世界信息（区块/实体/坐标），坐标保护对此路径天然不需要。
- * <p>
- * 流程：{@code AsyncPlayerConnectionConfigureEvent}（Paper 为每个连接分配独立虚拟线程，阻塞安全）
- * → 弹窗并阻塞配置线程等待提交 → 密码错误重弹（错误显示在窗口内）/ 达到失败阈值 disconnect /
- * 认证成功记录结果放行 → 玩家进入世界时由 PlayerListener.onJoin 消费结果完成登录收尾。
- * <p>
- * 回退路径（不弹窗直接放行，走聊天栏提示流程）：Dialog 未启用 /
- * 客户端低于 1.21.6（无法解析配置阶段 Dialog 包会被断连）/ 正版免密 / IP 免密 / 已登录（reconfigure）。
- * 超时未完成：kick-on-timeout 开启时 disconnect，否则放行由 onJoin 的 beginAuthFlow 接管。
+ * 玩家进入世界前弹窗完成登录/注册，认证成功才放行，登录前不接收任何世界信息（坐标保护天然不需要）。
+ * 流程：配置阶段事件 → 弹窗阻塞等待提交 → 认证成功记录结果 → 进入世界由 onJoin 消费结果收尾。
+ * 回退聊天栏提示：Dialog 未启用 / 客户端&lt;1.21.6 / 正版或 IP 免密 / 已登录；超时按 kick-on-timeout 踢出或放行收尾。
  */
 @SuppressWarnings("UnstableApiUsage")
 public final class PreJoinAuthListener implements Listener {
@@ -90,8 +83,7 @@ public final class PreJoinAuthListener implements Listener {
 
     @EventHandler
     public void onConfigure(AsyncPlayerConnectionConfigureEvent event) {
-        // 先清除可能的残留认证结果：上次连接认证成功但未进入世界（onJoin 未消费）时，
-        // 避免本次连接（含回退聊天栏提示的连接）误消费上一条连接的过期结果
+        // 清除上次连接可能残留的认证结果，避免本次连接误消费
         var profileId = event.getConnection().getProfile().getId();
         if (profileId != null) {
             outcomes.remove(profileId);
@@ -99,16 +91,16 @@ public final class PreJoinAuthListener implements Listener {
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
         PlayerConfigurationConnection conn = event.getConnection();
         UUID uuid = conn.getProfile().getId();
-        // 已登录（reconfigure 场景）：直接放行
+        // 已登录（reconfigure 场景）直接放行
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
-        // 客户端低于 1.21.6：收到配置阶段 Dialog 包会被断连，放行回退聊天栏提示流程
+        // 客户端不支持配置阶段 Dialog（<1.21.6），放行回退聊天栏提示
         if (!handshakeTracker.supportsDialogs(conn.getClientAddress())) return;
-        // 正版免密（非回退）/ IP 免密：放行，由 onJoin 现有逻辑处理
+        // 正版（非回退）/ IP 免密：放行，由 onJoin 现有逻辑处理
         if (skipAutoLogin(uuid, conn)) return;
 
         Session session = new Session(conn);
         sessions.put(uuid, session);
-        // 提升到方法作用域：超时断连时仍需使用玩家语言
+        // 提为方法作用域：超时断连时仍需玩家语言
         String locale = resolveLocale(conn);
         try {
             if (authManager.hasAccount(uuid)) {
@@ -116,7 +108,7 @@ public final class PreJoinAuthListener implements Listener {
             } else {
                 showRegister(session, uuid, locale, null);
             }
-            // 阻塞配置线程直到认证完成/超时（timeout=0 表示无限等待；虚拟线程阻塞开销极小）
+            // 阻塞配置线程直到认证完成/超时（timeout=0 无限等待；虚拟线程阻塞开销极小）
             int timeout = plugin.getConfigManager().loginTimeout();
             if (timeout <= 0) {
                 session.latch.await();
@@ -130,11 +122,10 @@ public final class PreJoinAuthListener implements Listener {
         }
         if (session.kicked || session.fallback) return;
         if (session.success) {
-            // 认证完成：放行进入世界，onJoin 消费结果完成登录收尾
             outcomes.put(uuid, session.registered ? AuthOutcome.REGISTER : AuthOutcome.LOGIN);
             return;
         }
-        // 超时未完成：按配置踢出，或放行由 onJoin 的 beginAuthFlow 接管（聊天栏提醒）
+        // 超时未完成：kick-on-timeout 开启时踢出，否则由 onJoin 的 beginAuthFlow 接管
         if (plugin.getConfigManager().kickOnTimeout()) {
             conn.disconnect(HTLogin.legacy(I18n.getForLocale("listener.login_timeout", locale)));
         }
@@ -147,11 +138,12 @@ public final class PreJoinAuthListener implements Listener {
         return ip != null && authManager.checkIpAutoLogin(uuid, ip);
     }
 
-    /** 客户端语言（ClientInformation 在配置阶段早期上报；读取失败回退默认语言） */
+    /** 客户端语言（读取失败回退默认） */
     private static String resolveLocale(PlayerConfigurationConnection conn) {
         try {
+            // getClientOption 保证非空，仅需判断是否空白
             String locale = conn.getClientOption(ClientOption.LOCALE);
-            return locale == null || locale.isBlank() ? null : locale;
+            return locale.isBlank() ? null : locale;
         } catch (Exception e) {
             return null;
         }
@@ -162,27 +154,24 @@ public final class PreJoinAuthListener implements Listener {
         return address != null ? address.getHostAddress() : null;
     }
 
-    // ===== 窗口展示与提交回调（回调线程不确定，仅做线程安全操作：重弹/断连/闭锁） =====
+    // ===== 窗口展示与提交回调（仅做线程安全操作：重弹/断连/闭锁） =====
 
     private void showLogin(Session session, UUID uuid, String locale, Component error) {
-        showDialog(session, uuid, dialogManager.buildLoginDialog(locale, error,
+        showDialog(session, dialogManager.buildLoginDialog(locale, error,
                 loginSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void showRegister(Session session, UUID uuid, String locale, Component error) {
-        showDialog(session, uuid, dialogManager.buildRegisterDialog(locale, error,
+        showDialog(session, dialogManager.buildRegisterDialog(locale, error,
                 registerSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void show2fa(Session session, UUID uuid, String locale, Component error) {
-        showDialog(session, uuid, dialogManager.build2faDialog(locale, error,
+        showDialog(session, dialogManager.build2faDialog(locale, error,
                 twoFactorSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
-    /**
-     * 取消回调：玩家点击"取消"即主动放弃登录，断开连接（pre-join 阶段尚未进世界，无需其它清理）。
-     * 标记 kicked 使 onConfigure 不放行，并唤醒阻塞的配置线程。
-     */
+    /** 取消：主动放弃登录并断连（pre-join 阶段尚未进世界），标记 kicked 放行 onConfigure 不放行并唤醒配置线程 */
     private DialogActionCallback cancel(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
@@ -192,8 +181,8 @@ public final class PreJoinAuthListener implements Listener {
         };
     }
 
-    /** 发送窗口到配置阶段客户端；发送失败（意外）中止 pre-join 放行，回退聊天栏提示 */
-    private void showDialog(Session session, UUID uuid, Dialog dialog) {
+    /** 发送窗口；发送失败（意外）中止 pre-join，回退聊天栏提示 */
+    private void showDialog(Session session, Dialog dialog) {
         try {
             session.connection.getAudience().showDialog(dialog);
         } catch (Exception e) {
@@ -205,7 +194,7 @@ public final class PreJoinAuthListener implements Listener {
     /** 登录窗口提交：bcrypt 异步校验，失败重弹，需 2FA 切换验证窗口，达阈值断连 */
     private DialogActionCallback loginSubmit(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
-            // 会话已结束（超时放行后提交）：忽略过期提交
+            // 会话已结束（超时/取消后提交）：忽略过期提交
             if (sessions.get(uuid) != session) return;
             String password = response.getText("password");
             if (password == null || password.isEmpty()) {

@@ -18,12 +18,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Pre-join Dialog 登录窗口构建器（Paper 1.21.11+）：
- * 提供登录/注册/双因素验证三种窗口，供 PreJoinAuthListener 在配置阶段弹出。
- * 窗口含"提交/取消"双按钮，提交/取消行为由传入的回调决定（提交=完成登录，取消=断连）。
- * 窗口不可 ESC 关闭，错误信息作为正文最后一行显示。
- * <p>
- * Dialog API 引用全部隔离在此包：服务端不支持（isSupported 为 false）时本类不实例化，
+ * Pre-join Dialog 登录窗口构建器（Paper 1.21.11+）：供 PreJoinAuthListener 在配置阶段弹出。
+ * 窗口含"提交/取消"双按钮、不可 ESC 关闭，错误信息作为正文最后一行显示。
+ * Dialog API 引用全部隔离在此包：服务端不支持（isSupported 为 false）时不实例化，
  * PreJoinAuthListener 不会注册，未登录玩家回退聊天栏提示（remind-method）。
  */
 // Dialog API 标记为 @ApiStatus.Experimental，实际已稳定可用（与 AsyncPlayerSpawnLocationEvent 同类情况）
@@ -51,9 +48,9 @@ public final class DialogManager {
         this.plugin = plugin;
     }
 
-    // ===== 窗口构建（locale 决定文案语言，错误行显示在正文末尾，取消行为由 onCancel 决定） =====
+    // ===== 窗口构建（错误行显示在正文末尾，取消行为由 onCancel 决定） =====
 
-    /** 登录窗口（密码输入）：供 PreJoinAuthListener 在配置阶段弹出 */
+    /** 登录窗口（密码输入） */
     Dialog buildLoginDialog(String locale, Component error, DialogActionCallback onSubmit, DialogActionCallback onCancel) {
         DialogBase base = base(locale, "dialog.login.title", "dialog.login.body", error)
                 .inputs(List.of(DialogInput.text("password", text(locale, "dialog.password_label"))
