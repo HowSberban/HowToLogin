@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit;
  * → 弹窗并阻塞配置线程等待提交 → 密码错误重弹（错误显示在窗口内）/ 达到失败阈值 disconnect /
  * 认证成功记录结果放行 → 玩家进入世界时由 PlayerListener.onJoin 消费结果完成登录收尾。
  * <p>
- * 回退路径（不弹窗直接放行，走 post-join 流程）：Dialog 未启用 / mode 非 pre-join /
+ * 回退路径（不弹窗直接放行，走聊天栏提示流程）：Dialog 未启用 /
  * 客户端低于 1.21.6（无法解析配置阶段 Dialog 包会被断连）/ 正版免密 / IP 免密 / 已登录（reconfigure）。
  * 超时未完成：kick-on-timeout 开启时 disconnect，否则放行由 onJoin 的 beginAuthFlow 接管。
  */
@@ -60,7 +60,7 @@ public final class PreJoinAuthListener implements Listener {
         final CountDownLatch latch = new CountDownLatch(1);
         volatile boolean success;
         volatile boolean kicked;
-        // 发送窗口失败：中止 pre-join 直接放行（回退 post-join）
+        // 发送窗口失败：中止 pre-join 直接放行（回退聊天栏提示）
         volatile boolean fallback;
         // 注册流程完成（写在 countDown 前，由闭锁建立 happens-before）
         boolean registered;
@@ -91,18 +91,17 @@ public final class PreJoinAuthListener implements Listener {
     @EventHandler
     public void onConfigure(AsyncPlayerConnectionConfigureEvent event) {
         // 先清除可能的残留认证结果：上次连接认证成功但未进入世界（onJoin 未消费）时，
-        // 避免本次连接（含回退 post-join 的连接）误消费上一条连接的过期结果
+        // 避免本次连接（含回退聊天栏提示的连接）误消费上一条连接的过期结果
         var profileId = event.getConnection().getProfile().getId();
         if (profileId != null) {
             outcomes.remove(profileId);
         }
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
-        if (!plugin.getConfigManager().loginDialogPreJoin()) return;
         PlayerConfigurationConnection conn = event.getConnection();
         UUID uuid = conn.getProfile().getId();
         // 已登录（reconfigure 场景）：直接放行
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
-        // 客户端低于 1.21.6：收到配置阶段 Dialog 包会被断连，放行回退 post-join 流程
+        // 客户端低于 1.21.6：收到配置阶段 Dialog 包会被断连，放行回退聊天栏提示流程
         if (!handshakeTracker.supportsDialogs(conn.getClientAddress())) return;
         // 正版免密（非回退）/ IP 免密：放行，由 onJoin 现有逻辑处理
         if (skipAutoLogin(uuid, conn)) return;
@@ -135,7 +134,7 @@ public final class PreJoinAuthListener implements Listener {
             outcomes.put(uuid, session.registered ? AuthOutcome.REGISTER : AuthOutcome.LOGIN);
             return;
         }
-        // 超时未完成：按配置踢出，或放行由 onJoin 的 beginAuthFlow 接管（post-join 提醒）
+        // 超时未完成：按配置踢出，或放行由 onJoin 的 beginAuthFlow 接管（聊天栏提醒）
         if (plugin.getConfigManager().kickOnTimeout()) {
             conn.disconnect(HTLogin.legacy(I18n.getForLocale("listener.login_timeout", locale)));
         }
@@ -167,20 +166,33 @@ public final class PreJoinAuthListener implements Listener {
 
     private void showLogin(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, uuid, dialogManager.buildLoginDialog(locale, error,
-                loginSubmit(session, uuid, locale)));
+                loginSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void showRegister(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, uuid, dialogManager.buildRegisterDialog(locale, error,
-                registerSubmit(session, uuid, locale)));
+                registerSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void show2fa(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, uuid, dialogManager.build2faDialog(locale, error,
-                twoFactorSubmit(session, uuid, locale)));
+                twoFactorSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
-    /** 发送窗口到配置阶段客户端；发送失败（意外）中止 pre-join 放行，回退 post-join */
+    /**
+     * 取消回调：玩家点击"取消"即主动放弃登录，断开连接（pre-join 阶段尚未进世界，无需其它清理）。
+     * 标记 kicked 使 onConfigure 不放行，并唤醒阻塞的配置线程。
+     */
+    private DialogActionCallback cancel(Session session, UUID uuid, String locale) {
+        return (response, audience) -> {
+            if (sessions.get(uuid) != session) return;
+            session.kicked = true;
+            session.latch.countDown();
+            session.connection.disconnect(HTLogin.legacy(I18n.getForLocale("dialog.cancelled", locale)));
+        };
+    }
+
+    /** 发送窗口到配置阶段客户端；发送失败（意外）中止 pre-join 放行，回退聊天栏提示 */
     private void showDialog(Session session, UUID uuid, Dialog dialog) {
         try {
             session.connection.getAudience().showDialog(dialog);

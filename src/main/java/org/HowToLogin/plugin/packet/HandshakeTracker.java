@@ -14,8 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 握手协议版本追踪：按远程地址记录每个连接的客户端协议版本。
  * Pre-join Dialog 需要据此判断客户端是否支持 Dialog（1.21.6+）：
- * 旧客户端收到配置阶段 Show Dialog 包会因无法解析而断连，必须回退 post-join 流程。
- * 注意：ViaVersion 等协议翻译层可能改写握手版本号，此类环境下建议使用 post-join 模式。
+ * 旧客户端收到配置阶段 Show Dialog 包会因无法解析而断连，必须回退聊天栏提示流程。
+ * 注意：ViaVersion 等协议翻译层可能改写握手版本号，此类环境下需依赖原始协议号比较（见 supportsDialogs）。
  */
 public final class HandshakeTracker extends PacketListenerAbstract {
 
@@ -44,7 +44,7 @@ public final class HandshakeTracker extends PacketListenerAbstract {
             }
             versions.put(address, new long[]{wrapper.getProtocolVersion(), System.currentTimeMillis()});
         } catch (Exception ignored) {
-            // 解析失败不拦截连接：版本未知时按不支持 Dialog 处理（回退 post-join）
+            // 解析失败不拦截连接：版本未知时按不支持 Dialog 处理（回退聊天栏提示）
         }
     }
 
@@ -54,7 +54,11 @@ public final class HandshakeTracker extends PacketListenerAbstract {
      */
     public boolean supportsDialogs(InetSocketAddress address) {
         long[] entry = versions.remove(address);
-        return entry != null
-                && ClientVersion.getById((int) entry[0]).isNewerThanOrEquals(ClientVersion.V_1_21_6);
+        if (entry == null) return false;
+        // 用原始协议号直接比较，避免 ClientVersion.getById 的 UNKNOWN 陷阱：
+        // getById 仅做精确枚举匹配，协议号落在枚举空隙（或经 Via 改写）时返回 UNKNOWN(-1)，
+        // 使 isNewerThanOrEquals(V_1_21_6) 恒为 false，导致 1.21.6+（含 26.x）客户端被误判为旧版回退聊天栏提示。
+        // 协议号单调递增，>= 1.21.6 的协议号即表示客户端支持 Dialog。
+        return entry[0] >= ClientVersion.V_1_21_6.getProtocolVersion();
     }
 }

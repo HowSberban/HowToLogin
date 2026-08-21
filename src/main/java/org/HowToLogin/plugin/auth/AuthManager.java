@@ -10,7 +10,6 @@ import org.howtologin.plugin.api.event.HTLoginUnregisterEvent;
 import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
-import org.howtologin.plugin.dialog.DialogManager;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -1052,11 +1051,6 @@ public final class AuthManager {
         player.getScheduler().run(plugin, task -> {
             // 立即隐藏提醒 BossBar（不等下一个提醒周期；非 bossbar 方式时为空操作）
             plugin.getPlayerListener().hideReminderBar(player);
-            // 关闭可能仍打开的登录 Dialog（聊天命令登录、管理员强制登录等旁路场景；未打开时无效果）
-            DialogManager dialog = plugin.getDialogManager();
-            if (dialog != null) {
-                dialog.close(player);
-            }
             // 仅对被设为旁观的玩家恢复游戏模式
             if (spectatorPending.remove(player.getUniqueId())) {
                 PlayerData data = dataManager.getPlayer(player.getUniqueId());

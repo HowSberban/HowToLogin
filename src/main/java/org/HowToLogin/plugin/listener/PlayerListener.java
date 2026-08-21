@@ -7,7 +7,6 @@ import org.bukkit.Bukkit;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
-import org.howtologin.plugin.dialog.DialogManager;
 import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -137,9 +136,9 @@ public final class PlayerListener implements Listener {
     }
 
     /**
-     * 挂起玩家等待登录/注册：待登录状态、旁观模式、登录界面、超时与周期提醒。
+     * 挂起玩家等待登录/注册：待登录状态、旁观模式、聊天提示、超时与周期提醒。
      * join 与 /reload 重挂起共用；有账号走登录流程，无账号走注册流程。
-     * Dialog 可用时弹出图形窗口（窗口常驻直到登录，无需周期提醒），否则回退聊天栏提示。
+     * 配置阶段 Dialog（pre-join）未能覆盖的玩家（旧客户端/旧服务端/超时放行）在此以聊天栏提示挂起。
      */
     public void beginAuthFlow(Player player) {
         boolean hasAccount = authManager.hasAccount(player);
@@ -147,12 +146,9 @@ public final class PlayerListener implements Listener {
             authManager.addPendingLogin(player);
         }
         authManager.setSpectator(player);
-        DialogManager dialog = plugin.getDialogManager();
-        if (dialog == null || !dialog.tryShowAuth(player, hasAccount)) {
-            player.sendMessage(HTLogin.legacy(I18n.get(
-                    hasAccount ? "listener.please_login" : "listener.please_register", player)));
-            scheduleReminder(player, hasAccount);
-        }
+        player.sendMessage(HTLogin.legacy(I18n.get(
+                hasAccount ? "listener.please_login" : "listener.please_register", player)));
+        scheduleReminder(player, hasAccount);
         scheduleLoginTimeout(player);
     }
 
@@ -238,19 +234,14 @@ public final class PlayerListener implements Listener {
     }
 
     /**
-     * 配置热重载后重新挂起未登录玩家：关闭旧 Dialog、清理旧提醒，
-     * 按新配置重新展示（Dialog 开关与提醒方式切换即时生效）。
+     * 配置热重载后重新挂起未登录玩家：清理旧提醒，按新配置重新展示。
      * 逐玩家切回其区域线程执行（Folia：管理员与目标玩家可能不在同一区域线程）。
      */
     public void refreshPendingPlayers() {
         clearReminderBars();
-        DialogManager dialog = plugin.getDialogManager();
         for (Player player : Bukkit.getOnlinePlayers()) {
             if (authManager.isLoggedIn(player)) continue;
-            player.getScheduler().run(plugin, task -> {
-                if (dialog != null) dialog.close(player);
-                beginAuthFlow(player);
-            }, null);
+            player.getScheduler().run(plugin, task -> beginAuthFlow(player), null);
         }
     }
 

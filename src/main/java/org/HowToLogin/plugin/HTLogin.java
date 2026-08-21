@@ -34,7 +34,7 @@ public final class HTLogin extends JavaPlugin {
     private PlayerListener playerListener;
     // Dialog 登录界面（1.21.6+）：服务端不支持时为 null，自动回退聊天栏提示
     private DialogManager dialogManager;
-    // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退 post-join/聊天栏
+    // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退聊天栏提示
     private PreJoinAuthListener preJoinAuthListener;
     // 握手协议版本追踪（pre-join 判断客户端是否支持配置阶段 Dialog）
     private HandshakeTracker handshakeTracker;
@@ -51,10 +51,10 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         this.playerDataManager = new PlayerDataManager(this);
         this.authManager = new AuthManager(this, playerDataManager, configManager);
-        // Dialog 登录界面：仅服务端支持（1.21.6+）时实例化，未实例化时自动回退聊天栏提示
+        // Dialog 登录界面：仅服务端支持（1.21.11+）时实例化，未实例化时回退聊天栏提示
         if (DialogManager.isSupported()) {
-            this.dialogManager = new DialogManager(this, authManager);
-            // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则仅支持 post-join
+            this.dialogManager = new DialogManager(this);
+            // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则回退聊天栏提示
             if (preJoinSupported()) {
                 this.handshakeTracker = new HandshakeTracker();
                 PacketEvents.getAPI().getEventManager().registerListener(handshakeTracker);
@@ -185,24 +185,36 @@ public final class HTLogin extends JavaPlugin {
         return playerListener;
     }
 
-    /** Dialog 登录界面（服务端不支持时为 null，调用方判空回退聊天栏提示） */
-    public DialogManager getDialogManager() {
-        return dialogManager;
-    }
-
-    /** Pre-join Dialog 监听器（配置事件 API 不可用时为 null，调用方判空回退 post-join 流程） */
+    /** 配置阶段 Dialog 监听器（配置事件 API 不可用时为 null，调用方判空回退聊天栏流程） */
     public PreJoinAuthListener getPreJoinAuthListener() {
         return preJoinAuthListener;
     }
 
-    /** 检测服务端是否支持配置阶段事件（Paper 1.21.4+），不支持时不注册 PreJoinAuthListener */
+    /**
+     * 检测服务端配置阶段 Dialog 是否稳定可用：事件 API 存在（1.21.4+）且服务端版本 >= 1.21.11。
+     * 1.21.6–1.21.10 虽能发送配置阶段 Dialog 包，但存在未验证的兼容问题（见 Paper issue #13365/#13708），
+     * AuthMe 亦将 pre-join 门槛定为 1.21.11+，故低于此版本回退聊天栏提示更稳妥。
+     * 版本解析与 AuthManager#detectNewWorldStructure 同源（兼容 26.x 新命名）。
+     */
     private static boolean preJoinSupported() {
         try {
             Class.forName("io.papermc.paper.event.connection.configuration.AsyncPlayerConnectionConfigureEvent");
-            return true;
         } catch (ClassNotFoundException e) {
             return false;
         }
+        // 解析 Bukkit version：如 "1.21.11-R0.1-SNAPSHOT"；26.x 新命名如 "26.1.2-R0.1"（主版本 >= 26 > 1）
+        String nums = Bukkit.getBukkitVersion().split("-", 2)[0];
+        String[] parts = nums.split("\\.");
+        int[] v = new int[3];
+        try {
+            for (int i = 0; i < parts.length && i < v.length; i++) {
+                v[i] = Integer.parseInt(parts[i]);
+            }
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        // 阈值 1.21.11：主版本 >1（含 26.x）满足；主版本==1 需次版本>21，或 ==21 且 patch>=11
+        return v[0] > 1 || (v[0] == 1 && (v[1] > 21 || (v[1] == 21 && v[2] >= 11)));
     }
 
     /** PlaceholderAPI 软依赖：存在时注册变量扩展 */
