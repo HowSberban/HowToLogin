@@ -340,8 +340,22 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     // ===== 辅助方法 =====
 
-    /** 从 channel 提取玩家 IP */
+    /** 从 channel 提取玩家真实 IP。
+     *  服务器开启 proxies.proxy-protocol（frp/nginx 内网穿透）时 channel.remoteAddress 是隧道入口地址，
+     *  真实 IP 存于 NMS Connection，优先反射读取其 getRemoteAddress()（与 Bukkit 各事件返回的地址一致）；
+     *  未开启或反射失败时回退 channel.remoteAddress。 */
     private static String extractIp(Channel channel) {
+        Object connection = channel.pipeline().get("packet_handler");
+        if (connection != null) {
+            try {
+                Object remote = connection.getClass().getMethod("getRemoteAddress").invoke(connection);
+                if (remote instanceof InetSocketAddress isa && isa.getAddress() != null) {
+                    return isa.getAddress().getHostAddress();
+                }
+            } catch (ReflectiveOperationException ignored) {
+                // 该 NMS 版本无此方法，回退 channel.remoteAddress
+            }
+        }
         if (channel.remoteAddress() instanceof InetSocketAddress addr) {
             return addr.getAddress().getHostAddress();
         }

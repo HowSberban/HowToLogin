@@ -63,9 +63,23 @@ public final class MojangClient {
     }
 
     /**
+     * 预热到 sessionserver 的 HTTPS 连接：异步提前完成 TCP+TLS 握手，
+     * 为第一个验证的玩家省去握手耗时（HttpClient 连接池复用）。
+     * 预热失败无影响，首次真实请求会自行建连。
+     */
+    public void warmUp() {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(HAS_JOINED_API + "warmup&serverId=warmup"))
+                .timeout(Duration.ofSeconds(5))
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        HTTP.sendAsync(request, HttpResponse.BodyHandlers.discarding()).exceptionally(t -> null);
+    }
+
+    /**
      * 异步向 Mojang 会话服务器发起 hasJoined 验证。
-     * 遇 204/429/502/503/504 等可重试结果时按配置（premium.max-retries / retry-backoff-base-ms）
-     * 指数退避自动重试。
+     * 遇 204/429/502/503/504 等可重试结果时按配置（premium.max-retries / retry-interval-ms）
+     * 等待固定间隔后自动重试。
      *
      * @param serverHash 服务器哈希（SHA-1(serverId + sharedSecret + publicKey) 的正十六进制）
      * @param username   玩家名称
@@ -75,12 +89,10 @@ public final class MojangClient {
         return CompletableFuture.supplyAsync(() -> {
             ConfigManager config = plugin.getConfigManager();
             int maxRetries = config.premiumMaxRetries();
-            long backoffBase = config.premiumRetryBackoffBaseMs();
+            long retryIntervalMs = config.premiumRetryIntervalMs();
 
-            // 首次调用前等待，确保客户端已 join Mojang sessionserver
-            // 客户端发 EncryptionResponse 后才 join Mojang，服务端可能更快到达 hasJoined
-            sleep(config.premiumInitialDelayMs());
-
+            // 无需等待：客户端在发送 EncryptionResponse 之前已向 sessionserver 发送 /join，
+            // 收到 EncryptionResponse 即可立即查询（与原版服务端行为一致）
             String url = HAS_JOINED_API
                     + URLEncoder.encode(username, StandardCharsets.UTF_8)
                     + "&serverId=" + serverHash;
@@ -127,12 +139,11 @@ public final class MojangClient {
                     return Optional.empty();
                 }
 
-                // 可重试结果统一在此退避；若仍剩尝试次数则重试，否则由循环条件终止
-                // 频繁重试会加重限流，故采用指数退避（间隔较长）
+                // 可重试结果统一在此等待固定间隔后重试；若仍剩尝试次数则重试，否则由循环条件终止
                 if (attempt < maxRetries) {
                     plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
                             username, attempt + 1, maxRetries));
-                    sleep(backoffDelay(backoffBase, attempt));
+                    sleep(retryIntervalMs);
                 }
             }
             // 重试耗尽：所有尝试均限流或超时
@@ -145,11 +156,6 @@ public final class MojangClient {
     /** 判断 HTTP 状态码是否可重试 */
     private static boolean isRetryable(int code) {
         return code == 429 || code == 502 || code == 503 || code == 504;
-    }
-
-    /** 指数退避延迟（毫秒）：attempt=0 → base，attempt=1 → 2*base */
-    private static long backoffDelay(long base, int attempt) {
-        return base * (1L << attempt);
     }
 
     /** 线程睡眠（不抛异常） */

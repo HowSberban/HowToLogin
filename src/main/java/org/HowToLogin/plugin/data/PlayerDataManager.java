@@ -357,6 +357,9 @@ public final class PlayerDataManager {
         if (offline.name() != null) {
             premiumNameIndex.remove(offline.name().toLowerCase());
         }
+        // 离线记录即将从数据库删除，脏标记不再有意义（防止残留）
+        dirty.remove(offlineUuid);
+        flushFailures.remove(offlineUuid);
         PlayerData premium = new PlayerData(premiumUuid, name, "",
                 ip != null && !ip.isEmpty() ? ip : offline.ip(),
                 System.currentTimeMillis() / 1000, offline.logoutLocation(), true, properties, offline.gameMode(),
@@ -402,11 +405,19 @@ public final class PlayerDataManager {
         return data != null && data.premium();
     }
 
+    /** 数据库中是否存在正版账号（premium=1）：premiumNameIndex 仅收录正版账号 */
+    public boolean hasPremiumAccount() {
+        return !premiumNameIndex.isEmpty();
+    }
+
     public void removePlayer(UUID uuid) {
         PlayerData data = players.remove(uuid);
         if (data != null && data.name() != null) {
             premiumNameIndex.remove(data.name().toLowerCase());
         }
+        // 清理落库相关状态：账号已删除，脏标记与重试计数不再有意义（防止残留）
+        dirty.remove(uuid);
+        flushFailures.remove(uuid);
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(SQL_DELETE)) {

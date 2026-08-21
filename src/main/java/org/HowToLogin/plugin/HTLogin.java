@@ -14,7 +14,6 @@ import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.howtologin.plugin.hook.HTLoginExpansion;
 import org.howtologin.plugin.listener.PlayerListener;
 import org.howtologin.plugin.packet.InventoryPacketListener;
-import org.howtologin.plugin.packet.HandshakeTracker;
 import org.howtologin.plugin.premium.ConnectionHandler;
 import org.howtologin.plugin.premium.DataService;
 import org.howtologin.plugin.premium.MojangClient;
@@ -52,9 +51,7 @@ public final class HTLogin extends JavaPlugin {
             DialogManager dialogManager = new DialogManager(this);
             // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则回退聊天栏提示
             if (preJoinSupported()) {
-                HandshakeTracker handshakeTracker = new HandshakeTracker();
-                PacketEvents.getAPI().getEventManager().registerListener(handshakeTracker);
-                this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager, handshakeTracker);
+                this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager);
                 getServer().getPluginManager().registerEvents(preJoinAuthListener, this);
             }
         } else if (configManager.loginDialogEnabled()) {
@@ -163,6 +160,10 @@ public final class HTLogin extends JavaPlugin {
         this.playerInjector = new PlayerInjector(this);
         PacketEvents.getAPI().getEventManager()
                 .registerListener(new ConnectionHandler(this, dataService, mojangClient, playerInjector, authManager));
+        // 预热 Mojang 连接：正版验证开启或已有正版账号时（premium=1 玩家始终验证，与开关无关）
+        if (configManager.premiumEnabled() || playerDataManager.hasPremiumAccount()) {
+            mojangClient.warmUp();
+        }
     }
 
     public ConfigManager getConfigManager() {

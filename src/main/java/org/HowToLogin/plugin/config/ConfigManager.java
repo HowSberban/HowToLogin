@@ -104,13 +104,11 @@ public final class ConfigManager {
     private int premiumCrackerCacheSeconds;
     // 加密握手阶段等待 EncryptionResponse 的超时（毫秒），防止恶意客户端滞留会话
     private int premiumHandshakeTimeoutMs;
-    // hasJoined 首次调用前等待（毫秒），确保客户端已 join Mojang sessionserver
-    private int premiumInitialDelayMs;
     // hasJoined 可重试状态码的最大重试次数（不含首次尝试）
     private int premiumMaxRetries;
-    // 重试指数退避基数（毫秒），第 n 次重试等待 base * 2^n
-    private long premiumRetryBackoffBaseMs;
-    // Mojang hasJoined 专用线程池大小（请求含 sleep/退避重试，阻塞式任务需独立线程）
+    // 重试等待间隔（毫秒），每次重试前等待的固定时长
+    private long premiumRetryIntervalMs;
+    // Mojang hasJoined 专用线程池大小（请求含 sleep/重试等待，阻塞式任务需独立线程）
     private int premiumHttpPoolSize;
     // 离线确认/正版回退缓存硬上限（超过则逐出最早过期项，防止攻击者无限刷新导致内存膨胀）
     private int premiumCacheCap;
@@ -227,16 +225,22 @@ public final class ConfigManager {
         if (this.minPasswordLength < 4) {
             plugin.getLogger().warning(I18n.get("log.password_min_length_clamped", this.minPasswordLength, 4));
             this.minPasswordLength = 4;
+            config.set("password.min-length", 4);
+            configDirty = true;
         }
         // 最大值不得大于 128
         if (this.maxPasswordLength > 128) {
             plugin.getLogger().warning(I18n.get("log.password_max_length_clamped", this.maxPasswordLength, 128));
             this.maxPasswordLength = 128;
+            config.set("password.max-length", 128);
+            configDirty = true;
         }
         // 最大值不得小于最小值
         if (this.maxPasswordLength < this.minPasswordLength) {
             plugin.getLogger().warning(I18n.get("log.password_length_range_invalid", this.maxPasswordLength, this.minPasswordLength));
             this.maxPasswordLength = this.minPasswordLength;
+            config.set("password.max-length", this.minPasswordLength);
+            configDirty = true;
         }
         this.passwordHashAlgorithm = config.getString("password.hash", "bcrypt").toLowerCase(Locale.ROOT);
         // 哈希算法校验：仅支持 bcrypt/sha256，非法值回退为 bcrypt（避免静默降级为 sha256）
@@ -310,9 +314,8 @@ public final class ConfigManager {
         this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 10), 1);
         this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);
         this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
-        this.premiumInitialDelayMs = clampInt("premium.initial-delay-ms", config.getInt("premium.initial-delay-ms", 1000), 0);
         this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
-        this.premiumRetryBackoffBaseMs = clampInt("premium.retry-backoff-base-ms", config.getInt("premium.retry-backoff-base-ms", 5000), 0);
+        this.premiumRetryIntervalMs = clampInt("premium.retry-interval-ms", config.getInt("premium.retry-interval-ms", 500), 0);
         this.premiumHttpPoolSize = clampRange("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2, 64);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
@@ -477,9 +480,8 @@ public final class ConfigManager {
     public int premiumTimeoutSeconds() { return premiumTimeoutSeconds; }
     public int premiumCrackerCacheSeconds() { return premiumCrackerCacheSeconds; }
     public int premiumHandshakeTimeoutMs() { return premiumHandshakeTimeoutMs; }
-    public long premiumInitialDelayMs() { return premiumInitialDelayMs; }
     public int premiumMaxRetries() { return premiumMaxRetries; }
-    public long premiumRetryBackoffBaseMs() { return premiumRetryBackoffBaseMs; }
+    public long premiumRetryIntervalMs() { return premiumRetryIntervalMs; }
     public int premiumHttpPoolSize() { return premiumHttpPoolSize; }
     public int premiumCacheCap() { return premiumCacheCap; }
     public boolean premiumUpgradeEnabled() { return premiumUpgradeEnabled; }

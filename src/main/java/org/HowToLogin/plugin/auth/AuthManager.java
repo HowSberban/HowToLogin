@@ -279,12 +279,20 @@ public final class AuthManager {
         clearPremiumFallback(uuid);
         onLoginSuccess(player);
         Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
-        // IP 变动提醒：上次登录 IP 存在且与本次不同（首次登录无旧 IP 可比，不提醒）
+        // IP 变动提醒：上次登录 IP 存在且与本次不同（首次登录无旧 IP 可比，不提醒）。
+        // 正版玩家身份经 Mojang 验证，仅在开启正版验证回退（正版可能转密码登录）时才提醒；
+        // 离线（非正版）玩家始终提醒。
         if (configManager.ipChangeNotifyEnabled()
                 && oldIp != null && !oldIp.isEmpty()
-                && !oldIp.equals(data.ip())) {
+                && !oldIp.equals(data.ip())
+                && notifyIpChangeFor(data)) {
             player.sendMessage(HTLogin.legacy(I18n.get("login.ip_changed", player, oldIp)));
         }
+    }
+
+    /** IP 变动提醒是否适用于该玩家：离线玩家提醒；正版玩家仅当正版验证回退开启时提醒（fallback 仅约束正版） */
+    private boolean notifyIpChangeFor(PlayerData data) {
+        return !data.premium() || configManager.premiumPasswordFallbackEnabled();
     }
 
     // ===== 双因素认证（TOTP） =====
@@ -548,6 +556,9 @@ public final class AuthManager {
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
         spectatorPending.remove(uuid);
+        pendingUpgrade.remove(uuid);
+        premiumFallback.remove(uuid);
+        pendingPremiumPassword.remove(uuid);
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
             // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
@@ -745,6 +756,8 @@ public final class AuthManager {
         // 清除正版回退标记（会话级状态：本次连接要求密码登录，退出即失效，
         // 防止残留标记使下次验证成功的连接仍误走密码路径）
         premiumFallback.remove(uuid);
+        // 清除待提示的正版明文密码（握手后、join 前断开时 pollPremiumPassword 不会调用，防止残留）
+        pendingPremiumPassword.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
         // 注意：不清除失败计数与踢出记录（failedAttempts / kickUntil）。

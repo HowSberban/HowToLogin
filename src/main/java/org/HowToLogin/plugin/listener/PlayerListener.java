@@ -259,7 +259,9 @@ public final class PlayerListener implements Listener {
 
         var conn = event.getConnection();
         java.util.UUID uuid = conn.getProfile().getId();
-        String ip = conn.getClientAddress().getAddress().getHostAddress();
+        // 代理协议下地址可能未解析（getAddress() 返回 null），判空避免 NPE
+        var clientAddr = conn.getClientAddress().getAddress();
+        String ip = clientAddr != null ? clientAddr.getHostAddress() : null;
 
         // IP 自动登录的玩家直接在退出位置出生，避免后续传送
         if (uuid != null && authManager.checkIpAutoLogin(uuid, ip)) {

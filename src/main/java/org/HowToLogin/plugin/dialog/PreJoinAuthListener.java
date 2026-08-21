@@ -6,6 +6,7 @@ import io.papermc.paper.dialog.Dialog;
 import io.papermc.paper.event.connection.configuration.AsyncPlayerConnectionConfigureEvent;
 import io.papermc.paper.registry.data.dialog.action.DialogActionCallback;
 import net.kyori.adventure.text.Component;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -13,7 +14,6 @@ import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.auth.PasswordValidator;
-import org.howtologin.plugin.packet.HandshakeTracker;
 
 import java.util.Map;
 import java.util.UUID;
@@ -41,7 +41,6 @@ public final class PreJoinAuthListener implements Listener {
     private final HTLogin plugin;
     private final AuthManager authManager;
     private final DialogManager dialogManager;
-    private final HandshakeTracker handshakeTracker;
     // 配置阶段认证结果：UUID → 结果（进入世界时移除）
     private final Map<UUID, AuthOutcome> outcomes = new ConcurrentHashMap<>();
     // 活跃的配置阶段会话（Dialog 提交回调查找）
@@ -64,11 +63,10 @@ public final class PreJoinAuthListener implements Listener {
     }
 
     public PreJoinAuthListener(HTLogin plugin, AuthManager authManager,
-                               DialogManager dialogManager, HandshakeTracker handshakeTracker) {
+                               DialogManager dialogManager) {
         this.plugin = plugin;
         this.authManager = authManager;
         this.dialogManager = dialogManager;
-        this.handshakeTracker = handshakeTracker;
     }
 
     /** 玩家进入世界时消费配置阶段认证结果（无结果返回 null，走正常登录流程） */
@@ -83,18 +81,18 @@ public final class PreJoinAuthListener implements Listener {
 
     @EventHandler
     public void onConfigure(AsyncPlayerConnectionConfigureEvent event) {
+        PlayerConfigurationConnection conn = event.getConnection();
         // 清除上次连接可能残留的认证结果，避免本次连接误消费
-        var profileId = event.getConnection().getProfile().getId();
+        var profileId = conn.getProfile().getId();
         if (profileId != null) {
             outcomes.remove(profileId);
         }
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
-        PlayerConfigurationConnection conn = event.getConnection();
         UUID uuid = conn.getProfile().getId();
         // 已登录（reconfigure 场景）直接放行
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
-        // 客户端不支持配置阶段 Dialog（<1.21.6），放行回退聊天栏提示
-        if (!handshakeTracker.supportsDialogs(conn.getClientAddress())) return;
+        // 客户端是否支持配置阶段 Dialog（<1.21.6 收到 Show Dialog 包会断连，回退聊天栏提示）
+        if (!supportsDialogs(uuid)) return;
         // 正版（非回退）/ IP 免密：放行，由 onJoin 现有逻辑处理
         if (skipAutoLogin(uuid, conn)) return;
 
@@ -140,6 +138,27 @@ public final class PreJoinAuthListener implements Listener {
         return ip != null && authManager.checkIpAutoLogin(uuid, ip);
     }
 
+    /**
+     * 客户端是否支持配置阶段 Dialog（协议 >= 1.21.6 / 771）。
+     * 无 ViaVersion 时视为支持：本监听器仅在服务端 >= 1.21.11 时注册（见 HTLogin#preJoinSupported），
+     * 能直接连上该版本服务端的客户端协议必然匹配（>= 1.21.11 > 1.21.6），一定支持 Dialog。
+     * 仅在有 ViaVersion（允许旧客户端连新服务端）时，才需用 ViaAPI 按 UUID 查询客户端真实协议版本。
+     */
+    private static boolean supportsDialogs(UUID playerId) {
+        try {
+            if (Bukkit.getPluginManager().getPlugin("ViaVersion") == null) {
+                return true;
+            }
+            Class<?> viaApiClass = Class.forName("com.viaversion.viaversion.api.ViaAPI");
+            Class<?> viaClass = Class.forName("com.viaversion.viaversion.api.Via");
+            Object api = viaClass.getMethod("getAPI").invoke(null);
+            int version = (int) viaApiClass.getMethod("getPlayerVersion", UUID.class).invoke(api, playerId);
+            return version >= 771;
+        } catch (Exception e) {
+            return true; // 查询失败保守放行（不阻塞正常玩家），回退到聊天栏在 onJoin 处理
+        }
+    }
+
     /** 客户端语言（读取失败回退默认） */
     private static String resolveLocale(PlayerConfigurationConnection conn) {
         try {
@@ -173,7 +192,7 @@ public final class PreJoinAuthListener implements Listener {
                 twoFactorSubmit(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
-    /** 取消：主动放弃登录并断连（pre-join 阶段尚未进世界），标记 kicked 放行 onConfigure 不放行并唤醒配置线程 */
+    /** 取消：主动放弃登录并断连（pre-join 阶段尚未进世界）；标记 kicked 使 onConfigure 不放行，并唤醒配置线程 */
     private DialogActionCallback cancel(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
