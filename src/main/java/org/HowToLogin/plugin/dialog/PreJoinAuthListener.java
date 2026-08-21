@@ -113,6 +113,8 @@ public final class PreJoinAuthListener implements Listener {
             if (timeout <= 0) {
                 session.latch.await();
             } else {
+                // 认证结果由上方 session 标志判断，await 返回值无需使用
+                //noinspection ResultOfMethodCallIgnored
                 session.latch.await(timeout, TimeUnit.SECONDS);
             }
         } catch (InterruptedException e) {
