@@ -229,8 +229,8 @@ public final class ConfigManager {
         }
         this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify.enabled", true);
         // 双因素认证
-        this.twoFactorEnabled = config.getBoolean("2fa.enabled", true);
-        this.twoFactorIssuer = config.getString("2fa.issuer", "HTLogin");
+        this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
+        this.twoFactorIssuer = config.getString("login.2fa.issuer", "HTLogin");
 
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
