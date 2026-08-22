@@ -350,7 +350,7 @@ public final class ConfigManager {
             }
         }
         this.premiumSessionServerMirrors = List.copyOf(mirrors);
-        this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 10), 1);
+        this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 5), 1);
         // 验证总时限：默认 25 秒，须小于客户端"通讯加密中"等待上限（30 秒），避免服务端验证超时后客户端已主动断开
         this.premiumVerifyDeadlineMs = clampInt("premium.verify-deadline-ms", config.getInt("premium.verify-deadline-ms", 25000), 1000);
         this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);

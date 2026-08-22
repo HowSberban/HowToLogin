@@ -26,6 +26,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Mojang 会话验证客户端（模块3）。
@@ -43,19 +45,24 @@ public final class MojangClient {
     // Mojang sessionserver 要求 User-Agent，否则可能返回 403/429
     private static final String USER_AGENT = "HTLogin-Premium/1.0";
 
+    // 熔断冷却基数（毫秒）：连续失败按 15s、30s、60s... 指数退避
+    private static final long BREAKER_BASE_COOLDOWN_MS = 15_000L;
+    // 熔断冷却封顶（毫秒）
+    private static final long BREAKER_MAX_COOLDOWN_MS = 300_000L;
+
     /** 验证端点：唯一 key + HTTP 客户端（绑定出站代理或直连）+ 目标服务器基础 URL + 日志描述 */
     private record Endpoint(String key, HttpClient client, String baseUrl, String description) {}
 
-    // 直连 HttpClient（无出站代理），所有直连端点共用
-    private static final HttpClient DIRECT_CLIENT = HttpClient.newBuilder()
+    private final HTLogin plugin;
+    // 直连 HttpClient（无出站代理），本实例所有直连端点共用；
+    // 实例字段而非静态：close() 会关闭它，静态会导致 reload 后新实例拿到已关闭的 client
+    private final HttpClient directClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
-
-    private final HTLogin plugin;
     // 按代理地址缓存 HttpClient：出站代理在 HttpClient 构建时绑定且创建开销大，同地址代理复用
     private final Map<String, HttpClient> proxyClients = new ConcurrentHashMap<>();
-    // 启动探测结果：端点 key → 是否可用（连接成功=true）。未探测/探测中无记录，使用时不跳过
-    private final Map<String, Boolean> availability = new ConcurrentHashMap<>();
+    // 端点熔断状态：连续失败按指数退避隔离，冷却到期由后台轻量探测确认恢复（玩家验证永不当试探）
+    private final Map<String, Breaker> breakers = new ConcurrentHashMap<>();
     // 独立线程池：hasJoined 内部含 sleep + 重试等待，最长可阻塞较久，
     // 用专用线程池避免占用公共 ForkJoinPool 拖累其它插件的异步任务。
     // 池大小由配置 premium.http-pool-size 控制（阻塞式任务，高并发正版验证时可按负载调大）
@@ -80,7 +87,7 @@ public final class MojangClient {
     private List<Endpoint> allEndpoints() {
         ConfigManager config = plugin.getConfigManager();
         List<Endpoint> list = new ArrayList<>();
-        String official = config.premiumSessionServerCandidates().get(0);
+        String official = config.premiumSessionServerCandidates().getFirst();
         for (Proxy proxy : config.premiumHttpProxies()) {
             var addr = (InetSocketAddress) proxy.address();
             String proxyDesc = addr.getHostString() + ":" + addr.getPort();
@@ -89,23 +96,71 @@ public final class MojangClient {
                     I18n.get("log.premium_endpoint_via_proxy", official, proxyDesc)));
         }
         for (String baseUrl : config.premiumSessionServerCandidates()) {
-            list.add(new Endpoint("direct:" + baseUrl, DIRECT_CLIENT, baseUrl, baseUrl));
+            list.add(new Endpoint("direct:" + baseUrl, directClient, baseUrl, baseUrl));
         }
         return list;
     }
 
-    /** 构建验证端点列表：跳过启动探测确认为不可用的端点；未探测/探测中的端点不跳过（保留兜底） */
+    /**
+     * 构建验证端点列表：跳过熔断中的端点（连续失败后按指数退避隔离）。
+     * 冷却到期时触发后台轻量探测确认恢复（探测在途期间继续跳过，玩家验证永不当试探）。
+     * 全部端点处于熔断时兜底返回全部（宁试死节点也不直接拒登录）。
+     */
     private List<Endpoint> buildEndpoints() {
-        List<Endpoint> list = new ArrayList<>();
-        for (Endpoint endpoint : allEndpoints()) {
-            // null=未探测/探测中不跳过（保持既有的运行时兜底）；true=可用；false=启动探测失败，跳过
-            if (Boolean.FALSE.equals(availability.get(endpoint.key()))) {
-                plugin.getLogger().warning(I18n.get("log.premium_endpoint_skipped", endpoint.description()));
+        List<Endpoint> all = allEndpoints();
+        List<Endpoint> list = new ArrayList<>(all.size());
+        long now = System.currentTimeMillis();
+        for (Endpoint endpoint : all) {
+            Breaker b = breakers.get(endpoint.key());
+            if (b == null || b.failCount == 0) {
+                list.add(endpoint);
                 continue;
             }
-            list.add(endpoint);
+            if (now - b.failedAt >= breakerCooldownMs(b.failCount)) {
+                // 冷却到期：后台探测确认恢复（在途不重复触发），本次仍跳过
+                probe(endpoint);
+            } else if (!b.announced) {
+                // 每次熔断期仅告警一次，避免每次验证重复输出
+                b.announced = true;
+                plugin.getLogger().warning(I18n.get("log.premium_endpoint_skipped", endpoint.description()));
+            }
         }
-        return list;
+        return list.isEmpty() ? all : list;
+    }
+
+    /** 熔断冷却时长：15s 起按连续失败次数倍增，封顶 5 分钟（位移上限防极端溢出） */
+    private static long breakerCooldownMs(int failCount) {
+        int shift = Math.min(failCount - 1, 20);
+        return Math.min(BREAKER_BASE_COOLDOWN_MS << shift, BREAKER_MAX_COOLDOWN_MS);
+    }
+
+    /** 记录端点验证成功：清除熔断状态；从熔断中恢复时输出 INFO 便于运维确认节点回归 */
+    private void breakerSuccess(Endpoint endpoint) {
+        Breaker b = breakers.get(endpoint.key());
+        if (b == null || b.failCount == 0) return;
+        b.failCount = 0;
+        b.announced = false;
+        plugin.getLogger().info(I18n.get("log.premium_endpoint_recovered", endpoint.description()));
+    }
+
+    /** 记录端点失败（不可达/持续过载）：失败次数 +1，进入或延长熔断冷却 */
+    private void breakerFailure(Endpoint endpoint) {
+        breakers.computeIfAbsent(endpoint.key(), k -> new Breaker()).recordFailure();
+    }
+
+    /** 端点熔断状态：failCount=0 正常；>0 熔断中，冷却时长随失败次数指数增长 */
+    private static final class Breaker {
+        volatile int failCount;
+        volatile long failedAt;
+        // 本次熔断期是否已告警（恢复时重置，再熔断可再次告警）
+        volatile boolean announced;
+        // 后台探测在途标记（防重复触发）
+        final AtomicBoolean probing = new AtomicBoolean();
+
+        void recordFailure() {
+            failCount++;
+            failedAt = System.currentTimeMillis();
+        }
     }
 
     /** 获取/创建绑定指定出站代理的 HttpClient（Java HttpClient 不支持按请求切换代理，须按代理构建） */
@@ -116,32 +171,60 @@ public final class MojangClient {
                 .build());
     }
 
-    /** 关闭线程池（插件禁用时调用） */
+    /** 关闭线程池与全部 HttpClient（插件禁用时调用），等待在途验证任务收尾 */
     public void close() {
         httpExecutor.shutdown();
+        try {
+            // 等待在途验证完成，避免旧实例的回调打到已注销的监听器
+            if (!httpExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                httpExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            httpExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+        // HttpClient 持有内部 selector 线程，不关闭会在插件 reload 时随旧类加载器泄漏
+        proxyClients.values().forEach(HttpClient::close);
+        proxyClients.clear();
+        directClient.close();
     }
 
     /**
-     * 启动时异步探测所有验证端点的可用性（不阻塞服务器启动）：
-     * 向每个端点发一个轻量请求，连接成功（未抛 IOException）即视为可用并记录结果，
-     * 失败记录为不可用，供 buildEndpoints 在后续验证时选择性跳过。
-     * 连接池在此过程中自然预热，首个验证的玩家可省去握手耗时。
-     * 探测无结果（仍为 null）时使用时不跳过，保留既有的运行时兜底。
+     * 启动时异步探测所有验证端点（不阻塞服务器启动）：预热连接池（首个玩家省去握手耗时），
+     * 同时探测失败仅记 1 次熔断失败（15 秒后即有自愈机会），不会永久判死刑。
      */
     public void probeAll() {
         for (Endpoint endpoint : allEndpoints()) {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(
-                            endpoint.baseUrl() + HAS_JOINED_PATH + "probe&serverId=probe"))
-                    .timeout(Duration.ofSeconds(5))
-                    .header("User-Agent", USER_AGENT)
-                    .GET()
-                    .build();
-            endpoint.client().sendAsync(request, HttpResponse.BodyHandlers.discarding())
-                    // 收到任意 HTTP 响应：服务可达；抛异常（连接失败/超时）：不可达
-                    .thenApply(r -> true)
-                    .exceptionally(e -> false)
-                    .thenAccept(ok -> availability.put(endpoint.key(), ok));
+            probe(endpoint);
         }
+    }
+
+    /**
+     * 向单个端点发起后台轻量探测（sendAsync 不占线程），结果写回熔断状态：
+     * 可达 → 清除熔断；不可达 → 失败次数 +1（冷却指数延长）。
+     * probing 标记保证同一端点同一时刻至多一个探测在途。
+     */
+    // client 为共享长生命周期单例（DIRECT_CLIENT / proxyClients），供所有请求复用连接池，
+    // 不能按请求 try-with-resources 关闭，否则首次探测后连接池即失效，此处抑制 IDE 资源告警
+    @SuppressWarnings("resource")
+    private void probe(Endpoint endpoint) {
+        Breaker b = breakers.computeIfAbsent(endpoint.key(), k -> new Breaker());
+        if (!b.probing.compareAndSet(false, true)) return;
+        HttpRequest request = HttpRequest.newBuilder(URI.create(
+                        endpoint.baseUrl() + HAS_JOINED_PATH + "probe&serverId=probe"))
+                .timeout(Duration.ofSeconds(5))
+                .header("User-Agent", USER_AGENT)
+                .GET()
+                .build();
+        endpoint.client().sendAsync(request, HttpResponse.BodyHandlers.discarding())
+                // 收到任意 HTTP 响应：服务可达；抛异常（连接失败/超时）：不可达
+                .thenApply(r -> true)
+                .exceptionally(e -> false)
+                .thenAccept(ok -> {
+                    if (ok) breakerSuccess(endpoint);
+                    else breakerFailure(endpoint);
+                })
+                .whenComplete((r, t) -> b.probing.set(false));
     }
 
     /**
@@ -164,11 +247,11 @@ public final class MojangClient {
             // 依次尝试端点，直到某个端点给出确定答复或总时限耗尽
             for (Endpoint endpoint : buildEndpoints()) {
                 if (System.currentTimeMillis() >= deadline) break;
-                Optional<PremiumProfile> result = queryServer(endpoint, serverHash, encodedName, username, config, deadline);
-                if (result != null) {
-                    return result; // 该端点可达且给出确定答复（验证成功或未加入）
+                QueryResult result = queryServer(endpoint, serverHash, encodedName, username, config, deadline);
+                if (result.available()) {
+                    return result.profile(); // 该端点可达且给出确定答复（验证成功或未加入）
                 }
-                // result == null：该端点不可用（不可达/持续过载/时限耗尽），尝试下一个
+                // available=false：该端点不可用（不可达/持续过载/时限耗尽），尝试下一个
                 plugin.getLogger().warning(I18n.get("log.premium_session_server_unavailable", endpoint.description()));
             }
             // 所有端点均不可用或总时限耗尽
@@ -184,21 +267,23 @@ public final class MojangClient {
      * 收到 EncryptionResponse 即可立即查询（与原版服务端行为一致）。
      * 单次请求超时与重试等待均受总时限约束，避免超出客户端等待上限。
      *
-     * @return 确定答复：Optional.of(档案)=验证成功，Optional.empty()=未加入/拒绝；
-     *         null 表示该端点不可用（不可达/持续过载/时限耗尽），调用方应尝试下一个端点
+     * @return 单端点查询结果：available=true 时 profile 为确定答复（有值=验证成功，空=未加入/拒绝）；
+     *         available=false 表示该端点不可用（不可达/持续过载/时限耗尽），调用方应尝试下一个端点
      */
-    private Optional<PremiumProfile> queryServer(Endpoint endpoint, String serverHash, String encodedName,
-                                                 String username, ConfigManager config, long deadline) {
+    // client 为共享长生命周期单例（DIRECT_CLIENT / proxyClients），供所有请求复用连接池，
+    // 不能按请求 try-with-resources 关闭，否则首次请求后连接池即失效，此处抑制 IDE 资源告警
+    @SuppressWarnings("resource")
+    private QueryResult queryServer(Endpoint endpoint, String serverHash, String encodedName,
+                                    String username, ConfigManager config, long deadline) {
         int maxRetries = config.premiumMaxRetries();
         long retryIntervalMs = config.premiumRetryIntervalMs();
         long requestTimeoutMs = config.premiumTimeoutSeconds() * 1000L;
         String url = endpoint.baseUrl() + HAS_JOINED_PATH + encodedName + "&serverId=" + serverHash;
-        // 记录最后一次可重试结果的性质：重试耗尽后据此判断是"玩家未加入"（确定）还是"服务器过载"（换端点）
-        boolean lastWasOverload = false;
 
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0) return null; // 总时限耗尽，停止尝试
+            // 总时限耗尽：端点不可用，终止当前端点并切换下一个
+            if (remaining <= 0) return new QueryResult(Optional.empty(), false);
             HttpResponse<String> response;
             try {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
@@ -211,48 +296,55 @@ public final class MojangClient {
                 response = endpoint.client().send(request, HttpResponse.BodyHandlers.ofString());
             } catch (java.io.IOException e) {
                 // 连接失败（含连接/读取超时）：端点不可达，立即切换下一个（不在本端点重试，快速回退）
-                return null;
+                breakerFailure(endpoint);
+                return new QueryResult(Optional.empty(), false);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return null;
+                return new QueryResult(Optional.empty(), false);
             }
 
             int code = response.statusCode();
             if (code == 200) {
+                breakerSuccess(endpoint);
                 // 只解析一次 JSON，复用 JsonObject 提取 id 与 properties
                 JsonObject obj = parseJson(response.body());
                 String id = obj == null ? null : extractId(obj);
                 if (id == null) {
                     plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
                             username, "no id field"));
-                    return Optional.empty();
+                    return new QueryResult(Optional.empty(), true);
                 }
-                return Optional.of(new PremiumProfile(parseUuid(id), extractProperties(obj)));
+                return new QueryResult(Optional.of(new PremiumProfile(parseUuid(id), extractProperties(obj))), true);
             }
             if (code == 204) {
-                // 玩家未加入会话：可能是客户端 /join 尚未生效，等待后重试；重试耗尽视为确定的"未加入"
-                lastWasOverload = false;
-            } else if (isRetryable(code)) {
-                // 429/5xx：服务器过载，等待后重试；重试耗尽视为不可用，切换下一个端点
-                lastWasOverload = true;
-            } else {
-                // 其他状态码：确定失败
+                // 玩家未加入会话：客户端 /join 严格先于 EncryptionResponse 发出，204 即确定结论，零重试
+                breakerSuccess(endpoint);
+                return new QueryResult(Optional.empty(), true);
+            }
+            if (!isRetryable(code)) {
+                // 其他状态码：确定失败（端点本身可达）
+                breakerSuccess(endpoint);
                 plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
                         username, "HTTP " + code));
-                return Optional.empty();
+                return new QueryResult(Optional.empty(), true);
             }
-
+            // 429/5xx：服务器过载，等待后重试；重试耗尽落到循环外熔断
             if (attempt < maxRetries) {
                 long remainingAfter = deadline - System.currentTimeMillis();
-                if (remainingAfter <= 0) return null; // 总时限耗尽，不再等待重试
+                // 总时限耗尽：不再等待重试，切换下一个端点
+                if (remainingAfter <= 0) return new QueryResult(Optional.empty(), false);
                 plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
                         username, attempt + 1, maxRetries));
                 sleep(Math.min(retryIntervalMs, remainingAfter));
             }
         }
-        // 重试耗尽：过载 → 不可用（换端点）；未加入 → 确定答复
-        return lastWasOverload ? null : Optional.empty();
+        // 过载重试耗尽：熔断并换端点
+        breakerFailure(endpoint);
+        return new QueryResult(Optional.empty(), false);
     }
+
+    /** 单端点查询结果：available=false=端点不可用（换下一个），true=确定答复（profile 空=未加入/拒绝） */
+    private record QueryResult(Optional<PremiumProfile> profile, boolean available) {}
 
     /** 判断 HTTP 状态码是否可重试 */
     private static boolean isRetryable(int code) {
