@@ -140,8 +140,9 @@ public final class PreJoinAuthListener implements Listener {
 
     /**
      * 客户端是否支持配置阶段 Dialog（协议 >= 1.21.6 / 771）。
-     * 无 ViaVersion 时视为支持：本监听器仅在服务端 >= 1.21.11 时注册（见 HTLogin#preJoinSupported），
-     * 能直接连上该版本服务端的客户端协议必然匹配（>= 1.21.11 > 1.21.6），一定支持 Dialog。
+     * 无 ViaVersion 时视为支持：能连上本插件的服务端版本必然 >= 1.21.6
+     * （默认 1.21.11+，冒险模式可放宽到 1.21.6，见 HTLogin#preJoinSupported），
+     * 客户端协议匹配该服务端时必然 >= 1.21.6，一定支持 Dialog。
      * 仅在有 ViaVersion（允许旧客户端连新服务端）时，才需用 ViaAPI 按 UUID 查询客户端真实协议版本。
      */
     private static boolean supportsDialogs(UUID playerId) {

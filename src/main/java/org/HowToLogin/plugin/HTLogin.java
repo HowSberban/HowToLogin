@@ -48,14 +48,13 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         this.playerDataManager = new PlayerDataManager(this);
         this.authManager = new AuthManager(this, playerDataManager, configManager);
-        // Dialog 登录界面：仅服务端支持（1.21.11+）时实例化，未实例化时回退聊天栏提示
-        if (DialogManager.isSupported()) {
+        // Dialog 登录界面：服务端支持（1.21.6+）且版本满足（1.21.11+）时启用
+        // 1.21.6–1.21.10 存在未验证的兼容问题（Paper #13365/#13708），默认禁用，
+        // 经 login.dialog.allow-risky-versions 强制启用时由使用者自担风险
+        if (DialogManager.isSupported() && (preJoinSupported() || configManager.dialogAllowRiskyVersions())) {
             this.dialogManager = new DialogManager(this);
-            // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则回退聊天栏提示
-            if (preJoinSupported()) {
-                this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager);
-                getServer().getPluginManager().registerEvents(preJoinAuthListener, this);
-            }
+            this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager);
+            getServer().getPluginManager().registerEvents(preJoinAuthListener, this);
         } else if (configManager.loginDialogEnabled()) {
             getLogger().warning(I18n.get("log.dialog_unsupported"));
         }

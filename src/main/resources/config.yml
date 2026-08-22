@@ -47,6 +47,9 @@ login:
   # 登录前客户端不接收任何世界信息，无需坐标保护
   dialog:
     enabled: true
+    # 在 1.21.6–1.21.10 冒险启用登录窗口：该版本段存在未验证的兼容问题，默认关闭
+    # 启用需自担风险，服务端与客户端版本均须不低于 1.21.6
+    allow-risky-versions: false
   # IP 变动提醒：登录 IP 与上次不同时提示玩家
   ip-change-notify:
     enabled: true

@@ -5,7 +5,6 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.tree.LiteralCommandNode;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import io.papermc.paper.dialog.Dialog;
 import io.papermc.paper.registry.data.dialog.action.DialogActionCallback;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
@@ -27,7 +26,8 @@ import static io.papermc.paper.command.brigadier.Commands.literal;
  * /2fa disable <验证码>   - 验证码确认，关闭双因素
  * /2fa <验证码>           - 登录时的双因素验证
  */
-@SuppressWarnings("SameReturnValue")
+// Dialog API 标记为 @ApiStatus.Experimental，实际已稳定可用（与 DialogManager 同类情况）
+@SuppressWarnings({"SameReturnValue", "UnstableApiUsage"})
 public final class TwoFactorCommand {
 
     private final HTLogin plugin;
@@ -107,30 +107,25 @@ public final class TwoFactorCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** 弹游戏内 2FA 绑定对话框；确认后校验验证码完成绑定，失败重弹。取消/ESC 仅关闭窗口 */
+    /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消/ESC 仅关闭窗口 */
     private void showSetupDialog(Player player, String secret, Component error) {
         // 取消：不执行任何操作，窗口由 afterAction(CLOSE) 自动关闭
         DialogActionCallback onCancel = (returnValue, audience) -> {};
-        player.showDialog(dialogManager.buildSetupDialog(player.getLocale(), secret, error,
+        player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, error,
                 setupOnConfirm(player, secret), onCancel));
-    }
-
-    private void reOpenSetup(Player player, String secret, Component error) {
-        player.showDialog(dialogManager.buildSetupDialog(player.getLocale(), secret, error,
-                setupOnConfirm(player, secret), (returnValue, audience) -> {}));
     }
 
     private DialogActionCallback setupOnConfirm(Player player, String secret) {
         return (returnValue, audience) -> {
             String code = returnValue.getText("code");
             if (code == null || code.isEmpty()) {
-                reOpenSetup(player, secret, errorOf(player, "dialog.empty_code"));
+                showSetupDialog(player, secret, errorOf(player, "dialog.empty_code"));
                 return;
             }
             if (authManager.confirm2fa(player, code)) {
                 player.sendMessage(HTLogin.legacy(I18n.get("2fa.confirm_success", player)));
             } else {
-                reOpenSetup(player, secret, errorOf(player, "2fa.confirm_incorrect"));
+                showSetupDialog(player, secret, errorOf(player, "2fa.confirm_incorrect"));
             }
         };
     }

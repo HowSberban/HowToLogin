@@ -53,6 +53,8 @@ public final class ConfigManager {
     private String loginRemindMethod;
     // Dialog 登录界面：弹出图形化窗口登录/注册（Paper 1.21.11+，客户端需同版本以上）
     private boolean loginDialogEnabled;
+    // 1.21.6–1.21.10 冒险启用 Dialog：存在未验证的兼容问题，默认关闭
+    private boolean dialogAllowRiskyVersions;
     // IP 变动提醒：登录 IP 与上次不同时提示玩家
     private boolean ipChangeNotifyEnabled;
     // 双因素认证：全局开关（关闭后已绑定玩家跳过验证，密钥保留）
@@ -217,6 +219,7 @@ public final class ConfigManager {
         this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
         this.loginRemindMethod = config.getString("login.remind-method", "chat").toLowerCase(Locale.ROOT);
         this.loginDialogEnabled = config.getBoolean("login.dialog.enabled", false);
+        this.dialogAllowRiskyVersions = config.getBoolean("login.dialog.allow-risky-versions", false);
         // 提示方式校验：仅支持 chat/title/actionbar/bossbar，非法值回退为 chat
         if (!List.of("chat", "title", "actionbar", "bossbar").contains(this.loginRemindMethod)) {
             plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "login.remind-method", this.loginRemindMethod, "chat"));
@@ -487,6 +490,7 @@ public final class ConfigManager {
     public int loginRemindInterval() { return loginRemindInterval; }
     public String loginRemindMethod() { return loginRemindMethod; }
     public boolean loginDialogEnabled() { return loginDialogEnabled; }
+    public boolean dialogAllowRiskyVersions() { return dialogAllowRiskyVersions; }
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
     public boolean twoFactorEnabled() { return twoFactorEnabled; }
     public String twoFactorIssuer() { return twoFactorIssuer; }
