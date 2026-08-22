@@ -47,7 +47,7 @@ login:
   # 登录前客户端不接收任何世界信息，无需坐标保护
   dialog:
     enabled: true
-  # IP 变动提醒：登录 IP 与上次不同时提示玩家（首次登录不提醒）
+  # IP 变动提醒：登录 IP 与上次不同时提示玩家
   ip-change-notify:
     enabled: true
   # IP 免密登录：上次登录 IP 与当前一致时自动登录
