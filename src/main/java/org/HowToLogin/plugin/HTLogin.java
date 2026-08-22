@@ -122,13 +122,13 @@ public final class HTLogin extends JavaPlugin {
             Commands commands = event.registrar();
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
-            commands.register("2fa", "双因素认证", List.of("totp"), new TwoFactorCommand(this, authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
             commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
             commands.register("upgrade", "将离线账号升级为正版账号", List.of(), new UpgradeAccountCommand(this, authManager));
             commands.register(new UnregisterCommand(this, authManager).buildNode(), "删除账号（管理员）", List.of());
-            // htlogin 使用 brigadier 原生注册，子命令作为 literal 节点，
+            // 2fa 与 htlogin 一样使用 brigadier 原生注册，子命令作为 literal 节点，
             // 客户端在输入空格后能自动显示子命令列表
+            commands.register(new TwoFactorCommand(this, authManager).buildNode(), "双因素认证", List.of("totp"));
             commands.register(new HTLoginCommand(this).buildNode(), "插件管理命令", List.of());
         });
     }
