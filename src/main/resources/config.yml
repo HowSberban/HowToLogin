@@ -64,8 +64,6 @@ login:
     # 是否启用双因素认证
     # 关闭后已绑定玩家跳过验证直接登录，密钥不删，重新开启即恢复
     enabled: true
-    # 认证器应用中显示的发行方名称
-    issuer: HTLogin
 
 # 注册设置
 register:

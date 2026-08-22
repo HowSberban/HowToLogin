@@ -9,7 +9,6 @@ import io.papermc.paper.registry.data.dialog.action.DialogActionCallback;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
-import net.kyori.adventure.text.format.TextColor;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
@@ -104,13 +103,11 @@ public final class TwoFactorCommand {
             showSetupDialog(player, secret, null);
             return Command.SINGLE_SUCCESS;
         }
-        // 回退（不支持 Dialog）：合成可点击组件，密钥与 otpauth URI 均为点击即复制
+        // 回退（不支持 Dialog）：合成可点击组件，密钥点击即复制
         player.sendMessage(Component.empty()
                 .append(msg(player, "2fa.setup_title")).appendNewline()
                 .append(msg(player, "2fa.setup_hint")).appendNewline()
                 .append(clickToCopy(secret, player)).appendNewline()
-                .append(msg(player, "2fa.setup_link_hint")).appendNewline()
-                .append(clickToCopy(otpauthUri(secret, player), player)).appendNewline()
                 .append(msg(player, "2fa.setup_confirm")));
         return Command.SINGLE_SUCCESS;
     }
@@ -136,18 +133,10 @@ public final class TwoFactorCommand {
         };
     }
 
-    /** otpauth URI：认证器扫码/点击添加时自动填充发行方与账号，免手动输入 */
-    private String otpauthUri(String secret, Player player) {
-        String issuer = plugin.getConfigManager().twoFactorIssuer();
-        return "otpauth://totp/" + java.net.URLEncoder.encode(issuer + ":" + player.getName(), java.nio.charset.StandardCharsets.UTF_8)
-                + "?secret=" + secret
-                + "&issuer=" + java.net.URLEncoder.encode(issuer, java.nio.charset.StandardCharsets.UTF_8);
-    }
-
     /** 可点击复制组件：金色突出提示可点击，内容即展示文本，点击复制到剪贴板 */
     private static Component clickToCopy(String content, Player player) {
         return Component.text(content)
-                .color(TextColor.color(0xFFAA00))
+                .color(DialogManager.HIGHLIGHT_COLOR)
                 .hoverEvent(HoverEvent.showText(msg(player, "2fa.click_to_copy")))
                 .clickEvent(ClickEvent.copyToClipboard(content));
     }

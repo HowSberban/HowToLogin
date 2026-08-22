@@ -10,6 +10,7 @@ import io.papermc.paper.registry.data.dialog.input.DialogInput;
 import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
+import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.TextColor;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
@@ -29,6 +30,8 @@ import java.util.List;
 public final class DialogManager {
 
     private final HTLogin plugin;
+    // 2FA 密钥高亮色：聊天栏回退文本与 dialog 内密钥共用，突出可点击复制
+    public static final TextColor HIGHLIGHT_COLOR = TextColor.color(0xFFAA00);
     // 回调选项：不限点击次数，1 小时有效期防止回调悬挂
     private static final ClickCallback.Options CALLBACK_OPTIONS = ClickCallback.Options.builder()
             .uses(ClickCallback.UNLIMITED_USES)
@@ -79,9 +82,7 @@ public final class DialogManager {
     /** 双因素验证窗口（验证码输入） */
     Dialog build2faDialog(String locale, Component error, DialogActionCallback onConfirm, DialogActionCallback onCancel) {
         DialogBase base = base(locale, "dialog.2fa.title", "dialog.2fa.body", error)
-                .inputs(List.of(DialogInput.text("code", text(locale, "dialog.code_label"))
-                        .maxLength(10)
-                        .build()))
+                .inputs(List.of(codeInput(locale)))
                 .build();
         return confirmDialog(base, locale, onConfirm, onCancel);
     }
@@ -96,7 +97,7 @@ public final class DialogManager {
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
         // 密钥行：前缀 + 金色密钥，突出可点击复制的提示
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
-                .append(Component.text(secret).color(TextColor.color(0xFFAA00)))));
+                .append(Component.text(secret).color(HIGHLIGHT_COLOR))));
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
         if (error != null) {
             body.add(DialogBody.plainMessage(error));
@@ -105,11 +106,16 @@ public final class DialogManager {
                 .canCloseWithEscape(true)
                 .afterAction(DialogBase.DialogAfterAction.CLOSE)
                 .body(body)
-                .inputs(List.of(DialogInput.text("code", text(locale, "dialog.code_label"))
-                        .maxLength(10)
-                        .build()))
+                .inputs(List.of(codeInput(locale)))
                 .build();
-        return confirmDialog(base, locale, onConfirm, onCancel);
+        // 复制密钥 / 取消 / 确认，三列并排；exitAction null（取消由 ESC/取消按钮承担）
+        // 复制按钮用 staticAction 直接执行 ClickEvent 复制到剪贴板
+        return Dialog.create(factory -> factory.empty().base(base).type(DialogType.multiAction(List.of(
+                ActionButton.builder(text(locale, "dialog.setup_copy"))
+                        .action(DialogAction.staticAction(ClickEvent.copyToClipboard(secret)))
+                        .build(),
+                cancelButton(locale, onCancel),
+                confirmButton(locale, onConfirm)), null, 3)));
     }
 
     /** 窗口骨架：标题 + 正文 + 可选错误行，不可 ESC 关闭，确认后自动关闭（失败由确认处理重弹） */
@@ -127,13 +133,29 @@ public final class DialogManager {
 
     /** 组装取消/确认双按钮并创建 Dialog（confirmation 类型：两个按钮呈现为左=取消、右=确认） */
     private Dialog confirmDialog(DialogBase base, String locale, DialogActionCallback onConfirm, DialogActionCallback onCancel) {
-        ActionButton cancel = ActionButton.builder(text(locale, "dialog.cancel"))
+        return Dialog.create(factory -> factory.empty().base(base)
+                .type(DialogType.confirmation(cancelButton(locale, onCancel), confirmButton(locale, onConfirm))));
+    }
+
+    /** 取消按钮：触发自定义回调 */
+    private ActionButton cancelButton(String locale, DialogActionCallback onCancel) {
+        return ActionButton.builder(text(locale, "dialog.cancel"))
                 .action(DialogAction.customClick(onCancel, CALLBACK_OPTIONS))
                 .build();
-        ActionButton confirm = ActionButton.builder(text(locale, "dialog.confirm"))
+    }
+
+    /** 确认按钮：触发自定义回调 */
+    private ActionButton confirmButton(String locale, DialogActionCallback onConfirm) {
+        return ActionButton.builder(text(locale, "dialog.confirm"))
                 .action(DialogAction.customClick(onConfirm, CALLBACK_OPTIONS))
                 .build();
-        return Dialog.create(factory -> factory.empty().base(base).type(DialogType.confirmation(cancel, confirm)));
+    }
+
+    /** 验证码输入框（2fa 验证与 2fa 绑定共用） */
+    private DialogInput codeInput(String locale) {
+        return DialogInput.text("code", text(locale, "dialog.code_label"))
+                .maxLength(10)
+                .build();
     }
 
     /** 按指定语言获取消息转 Adventure Component（配置阶段无 Player 对象，用客户端 locale） */
