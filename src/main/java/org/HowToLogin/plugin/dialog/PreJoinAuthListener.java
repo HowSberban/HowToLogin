@@ -175,21 +175,21 @@ public final class PreJoinAuthListener implements Listener {
         return address != null ? address.getHostAddress() : null;
     }
 
-    // ===== 窗口展示与提交回调（仅做线程安全操作：重弹/断连/闭锁） =====
+    // ===== 窗口展示与确认回调（仅做线程安全操作：重弹/断连/闭锁） =====
 
     private void showLogin(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, dialogManager.buildLoginDialog(locale, error,
-                loginSubmit(session, uuid, locale), cancel(session, uuid, locale)));
+                loginConfirm(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void showRegister(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, dialogManager.buildRegisterDialog(locale, error,
-                registerSubmit(session, uuid, locale), cancel(session, uuid, locale)));
+                registerConfirm(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     private void show2fa(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, dialogManager.build2faDialog(locale, error,
-                twoFactorSubmit(session, uuid, locale), cancel(session, uuid, locale)));
+                twoFactorConfirm(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     /** 取消：主动放弃登录并断连（pre-join 阶段尚未进世界）；标记 kicked 使 onConfigure 不放行，并唤醒配置线程 */
@@ -212,8 +212,8 @@ public final class PreJoinAuthListener implements Listener {
         }
     }
 
-    /** 登录窗口提交：bcrypt 异步校验，失败重弹，需 2FA 切换验证窗口，达阈值断连 */
-    private DialogActionCallback loginSubmit(Session session, UUID uuid, String locale) {
+    /** 登录窗口确认：bcrypt 异步校验，失败重弹，需 2FA 切换验证窗口，达阈值断连 */
+    private DialogActionCallback loginConfirm(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             // 会话已结束（超时/取消后提交）：忽略过期提交
             if (sessions.get(uuid) != session) return;
@@ -245,8 +245,8 @@ public final class PreJoinAuthListener implements Listener {
         };
     }
 
-    /** 注册窗口提交：校验与 /register 一致，成功仅建号（登录收尾延迟到进入世界时） */
-    private DialogActionCallback registerSubmit(Session session, UUID uuid, String locale) {
+    /** 注册窗口确认：校验与 /register 一致，成功仅建号（登录收尾延迟到进入世界时） */
+    private DialogActionCallback registerConfirm(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
             if (authManager.hasAccount(uuid)) {
@@ -278,8 +278,8 @@ public final class PreJoinAuthListener implements Listener {
         };
     }
 
-    /** 双因素验证窗口提交：通过放行，失败重弹 */
-    private DialogActionCallback twoFactorSubmit(Session session, UUID uuid, String locale) {
+    /** 双因素验证窗口确认：通过放行，失败重弹 */
+    private DialogActionCallback twoFactorConfirm(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
             if (!authManager.isPending2fa(uuid)) {
