@@ -28,6 +28,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Mojang 会话验证客户端（模块3）。
@@ -56,9 +57,7 @@ public final class MojangClient {
     private final HTLogin plugin;
     // 直连 HttpClient（无出站代理），本实例所有直连端点共用；
     // 实例字段而非静态：close() 会关闭它，静态会导致 reload 后新实例拿到已关闭的 client
-    private final HttpClient directClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5))
-            .build();
+    private final HttpClient directClient = newHttpClient(null);
     // 按代理地址缓存 HttpClient：出站代理在 HttpClient 构建时绑定且创建开销大，同地址代理复用
     private final Map<String, HttpClient> proxyClients = new ConcurrentHashMap<>();
     // 端点熔断状态：连续失败按指数退避隔离，冷却到期由后台轻量探测确认恢复（玩家验证永不当试探）
@@ -112,11 +111,12 @@ public final class MojangClient {
         long now = System.currentTimeMillis();
         for (Endpoint endpoint : all) {
             Breaker b = breakers.get(endpoint.key());
-            if (b == null || b.failCount == 0) {
+            int fails = b == null ? 0 : b.failCount.get();
+            if (fails == 0) {
                 list.add(endpoint);
                 continue;
             }
-            if (now - b.failedAt >= breakerCooldownMs(b.failCount)) {
+            if (now - b.failedAt >= breakerCooldownMs(fails)) {
                 // 冷却到期：后台探测确认恢复（在途不重复触发），本次仍跳过
                 probe(endpoint);
             } else if (!b.announced) {
@@ -137,8 +137,8 @@ public final class MojangClient {
     /** 记录端点验证成功：清除熔断状态；从熔断中恢复时输出 INFO 便于运维确认节点回归 */
     private void breakerSuccess(Endpoint endpoint) {
         Breaker b = breakers.get(endpoint.key());
-        if (b == null || b.failCount == 0) return;
-        b.failCount = 0;
+        if (b == null || b.failCount.get() == 0) return;
+        b.failCount.set(0);
         b.announced = false;
         plugin.getLogger().info(I18n.get("log.premium_endpoint_recovered", endpoint.description()));
     }
@@ -150,7 +150,7 @@ public final class MojangClient {
 
     /** 端点熔断状态：failCount=0 正常；>0 熔断中，冷却时长随失败次数指数增长 */
     private static final class Breaker {
-        volatile int failCount;
+        final AtomicInteger failCount = new AtomicInteger();
         volatile long failedAt;
         // 本次熔断期是否已告警（恢复时重置，再熔断可再次告警）
         volatile boolean announced;
@@ -158,17 +158,21 @@ public final class MojangClient {
         final AtomicBoolean probing = new AtomicBoolean();
 
         void recordFailure() {
-            failCount++;
+            failCount.incrementAndGet();
             failedAt = System.currentTimeMillis();
         }
     }
 
+    /** 构建 HttpClient：统一 5 秒连接超时，proxy 为 null 时直连 */
+    private static HttpClient newHttpClient(ProxySelector proxy) {
+        HttpClient.Builder builder = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5));
+        return proxy == null ? builder.build() : builder.proxy(proxy).build();
+    }
+
     /** 获取/创建绑定指定出站代理的 HttpClient（Java HttpClient 不支持按请求切换代理，须按代理构建） */
     private HttpClient proxyClient(String key, Proxy proxy) {
-        return proxyClients.computeIfAbsent(key, k -> HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
-                .proxy(ProxySelector.of((InetSocketAddress) proxy.address()))
-                .build());
+        return proxyClients.computeIfAbsent(key,
+                k -> newHttpClient(ProxySelector.of((InetSocketAddress) proxy.address())));
     }
 
     /** 关闭线程池与全部 HttpClient（插件禁用时调用），等待在途验证任务收尾 */
@@ -255,10 +259,14 @@ public final class MojangClient {
                 plugin.getLogger().warning(I18n.get("log.premium_session_server_unavailable", endpoint.description()));
             }
             // 所有端点均不可用或总时限耗尽
-            plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                    username, "all session servers unavailable"));
+            logHasJoinedFailed(username, "all session servers unavailable");
             return Optional.empty();
         }, httpExecutor);
+    }
+
+    /** 输出正版验证失败 WARNING 日志 */
+    private void logHasJoinedFailed(String username, String reason) {
+        plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed", username, reason));
     }
 
     /**
@@ -283,7 +291,7 @@ public final class MojangClient {
         for (int attempt = 0; attempt <= maxRetries; attempt++) {
             long remaining = deadline - System.currentTimeMillis();
             // 总时限耗尽：端点不可用，终止当前端点并切换下一个
-            if (remaining <= 0) return new QueryResult(Optional.empty(), false);
+            if (remaining <= 0) return QueryResult.UNAVAILABLE;
             HttpResponse<String> response;
             try {
                 HttpRequest request = HttpRequest.newBuilder(URI.create(url))
@@ -297,10 +305,10 @@ public final class MojangClient {
             } catch (java.io.IOException e) {
                 // 连接失败（含连接/读取超时）：端点不可达，立即切换下一个（不在本端点重试，快速回退）
                 breakerFailure(endpoint);
-                return new QueryResult(Optional.empty(), false);
+                return QueryResult.UNAVAILABLE;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return new QueryResult(Optional.empty(), false);
+                return QueryResult.UNAVAILABLE;
             }
 
             int code = response.statusCode();
@@ -310,29 +318,27 @@ public final class MojangClient {
                 JsonObject obj = parseJson(response.body());
                 String id = obj == null ? null : extractId(obj);
                 if (id == null) {
-                    plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                            username, "no id field"));
-                    return new QueryResult(Optional.empty(), true);
+                    logHasJoinedFailed(username, "no id field");
+                    return QueryResult.NOT_JOINED;
                 }
                 return new QueryResult(Optional.of(new PremiumProfile(parseUuid(id), extractProperties(obj))), true);
             }
             if (code == 204) {
                 // 玩家未加入会话：客户端 /join 严格先于 EncryptionResponse 发出，204 即确定结论，零重试
                 breakerSuccess(endpoint);
-                return new QueryResult(Optional.empty(), true);
+                return QueryResult.NOT_JOINED;
             }
             if (!isRetryable(code)) {
                 // 其他状态码：确定失败（端点本身可达）
                 breakerSuccess(endpoint);
-                plugin.getLogger().warning(I18n.get("log.premium_hasjoined_failed",
-                        username, "HTTP " + code));
-                return new QueryResult(Optional.empty(), true);
+                logHasJoinedFailed(username, "HTTP " + code);
+                return QueryResult.NOT_JOINED;
             }
             // 429/5xx：服务器过载，等待后重试；重试耗尽落到循环外熔断
             if (attempt < maxRetries) {
                 long remainingAfter = deadline - System.currentTimeMillis();
                 // 总时限耗尽：不再等待重试，切换下一个端点
-                if (remainingAfter <= 0) return new QueryResult(Optional.empty(), false);
+                if (remainingAfter <= 0) return QueryResult.UNAVAILABLE;
                 plugin.getLogger().warning(I18n.get("log.premium_hasjoined_retry",
                         username, attempt + 1, maxRetries));
                 sleep(Math.min(retryIntervalMs, remainingAfter));
@@ -340,11 +346,16 @@ public final class MojangClient {
         }
         // 过载重试耗尽：熔断并换端点
         breakerFailure(endpoint);
-        return new QueryResult(Optional.empty(), false);
+        return QueryResult.UNAVAILABLE;
     }
 
     /** 单端点查询结果：available=false=端点不可用（换下一个），true=确定答复（profile 空=未加入/拒绝） */
-    private record QueryResult(Optional<PremiumProfile> profile, boolean available) {}
+    private record QueryResult(Optional<PremiumProfile> profile, boolean available) {
+        /** 端点不可用（不可达/过载重试耗尽/总时限耗尽），调用方应换下一个端点 */
+        static final QueryResult UNAVAILABLE = new QueryResult(Optional.empty(), false);
+        /** 确定答复：玩家未加入会话（204）/响应缺字段/请求被拒 */
+        static final QueryResult NOT_JOINED = new QueryResult(Optional.empty(), true);
+    }
 
     /** 判断 HTTP 状态码是否可重试 */
     private static boolean isRetryable(int code) {
