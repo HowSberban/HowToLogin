@@ -327,7 +327,8 @@ public final class ConfigManager {
         List<Proxy> httpProxies = new ArrayList<>();
         for (String raw : config.getStringList("premium.http-proxies")) {
             String entry = raw == null ? "" : raw.trim();
-            if (entry.isEmpty()) continue;
+            // 跳过默认配置自带的占位示例，未修改配置时不会误当真实代理探测
+            if (entry.isEmpty() || entry.equals("example.com:25565")) continue;
             Proxy proxy = parseHttpProxy(entry);
             if (proxy == null) {
                 plugin.getLogger().warning(I18n.get("log.config_http_proxy_invalid", entry));
@@ -341,7 +342,8 @@ public final class ConfigManager {
         List<String> mirrors = new ArrayList<>();
         for (String raw : config.getStringList("premium.session-server-mirrors")) {
             String url = raw == null ? "" : raw.trim();
-            if (url.isEmpty()) continue;
+            // 跳过默认配置自带的占位示例，未修改配置时不会误当真实镜像探测
+            if (url.isEmpty() || url.equals("https://mirror.example.com")) continue;
             if (url.startsWith("http://") || url.startsWith("https://")) {
                 // 去除末尾斜杠，保证拼接路径正确
                 mirrors.add(url.endsWith("/") ? url.substring(0, url.length() - 1) : url);
