@@ -85,6 +85,30 @@ public final class DialogManager {
         return confirmDialog(base, locale, onConfirm, onCancel);
     }
 
+    /**
+     * /2fa setup 游戏内绑定对话框：显示密钥 + 验证码输入。
+     * 与 pre-join 对话框不同：取消/ESC 仅关闭窗口，不踢出玩家。
+     */
+    public Dialog buildSetupDialog(String locale, String secret, Component error,
+                                   DialogActionCallback onConfirm, DialogActionCallback onCancel) {
+        List<DialogBody> body = new ArrayList<>();
+        body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
+        body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label", secret)));
+        body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
+        if (error != null) {
+            body.add(DialogBody.plainMessage(error));
+        }
+        DialogBase base = DialogBase.builder(text(locale, "dialog.setup.title"))
+                .canCloseWithEscape(true)
+                .afterAction(DialogBase.DialogAfterAction.CLOSE)
+                .body(body)
+                .inputs(List.of(DialogInput.text("code", text(locale, "dialog.code_label"))
+                        .maxLength(10)
+                        .build()))
+                .build();
+        return confirmDialog(base, locale, onConfirm, onCancel);
+    }
+
     /** 窗口骨架：标题 + 正文 + 可选错误行，不可 ESC 关闭，确认后自动关闭（失败由确认处理重弹） */
     private DialogBase.Builder base(String locale, String titleKey, String bodyKey, Component error) {
         List<DialogBody> body = new ArrayList<>();

@@ -31,6 +31,8 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
+    // Dialog API 构建器：服务端不支持（<1.21.11）时为 null
+    private DialogManager dialogManager;
     // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退聊天栏提示
     private PreJoinAuthListener preJoinAuthListener;
     // 正版验证异步组件（线程池管理等，禁用时回收）
@@ -48,7 +50,7 @@ public final class HTLogin extends JavaPlugin {
         this.authManager = new AuthManager(this, playerDataManager, configManager);
         // Dialog 登录界面：仅服务端支持（1.21.11+）时实例化，未实例化时回退聊天栏提示
         if (DialogManager.isSupported()) {
-            DialogManager dialogManager = new DialogManager(this);
+            this.dialogManager = new DialogManager(this);
             // Pre-join：配置阶段事件 API（1.21.4+）可用时启用，否则回退聊天栏提示
             if (preJoinSupported()) {
                 this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager);
@@ -128,7 +130,7 @@ public final class HTLogin extends JavaPlugin {
             commands.register(new UnregisterCommand(this, authManager).buildNode(), "删除账号（管理员）", List.of());
             // 2fa 与 htlogin 一样使用 brigadier 原生注册，子命令作为 literal 节点，
             // 客户端在输入空格后能自动显示子命令列表
-            commands.register(new TwoFactorCommand(this, authManager).buildNode(), "双因素认证", List.of("totp"));
+            commands.register(new TwoFactorCommand(this, authManager, dialogManager).buildNode(), "双因素认证", List.of("totp"));
             commands.register(new HTLoginCommand(this).buildNode(), "插件管理命令", List.of());
         });
     }
