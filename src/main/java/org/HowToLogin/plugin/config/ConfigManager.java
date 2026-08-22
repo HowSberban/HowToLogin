@@ -40,6 +40,8 @@ public final class ConfigManager {
 
     // 登录设置
     private int loginTimeout;
+    // 注册超时（秒）：与登录超时分开，供新玩家注册窗口使用
+    private int registerTimeout;
     private boolean kickOnTimeout;
     private boolean failProtectionEnabled;
     private int failMaxAttempts;
@@ -209,6 +211,7 @@ public final class ConfigManager {
 
         // 登录设置
         this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 120), 0);
+        this.registerTimeout = clampInt("register.timeout", config.getInt("register.timeout", 120), 0);
         this.kickOnTimeout = config.getBoolean("login.kick-on-timeout", true);
         this.failProtectionEnabled = config.getBoolean("login.fail-protection.enabled", true);
         this.failMaxAttempts = clampInt("login.fail-protection.max-attempts", config.getInt("login.fail-protection.max-attempts", 3), 1);
@@ -480,6 +483,7 @@ public final class ConfigManager {
 
     // 登录设置
     public int loginTimeout() { return loginTimeout; }
+    public int registerTimeout() { return registerTimeout; }
     public boolean kickOnTimeout() { return kickOnTimeout; }
     public boolean failProtectionEnabled() { return failProtectionEnabled; }
     public int failMaxAttempts() { return failMaxAttempts; }

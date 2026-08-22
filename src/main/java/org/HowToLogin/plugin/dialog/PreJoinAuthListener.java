@@ -14,6 +14,7 @@ import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.auth.PasswordValidator;
+import org.howtologin.plugin.config.ConfigManager;
 
 import java.util.Map;
 import java.util.UUID;
@@ -101,13 +102,15 @@ public final class PreJoinAuthListener implements Listener {
         // 提为方法作用域：超时断连时仍需玩家语言
         String locale = resolveLocale(conn);
         try {
-            if (authManager.hasAccount(uuid)) {
+            boolean isLogin = authManager.hasAccount(uuid);
+            if (isLogin) {
                 showLogin(session, uuid, locale, null);
             } else {
                 showRegister(session, uuid, locale, null);
             }
             // 阻塞配置线程直到认证完成/超时（timeout=0 无限等待；虚拟线程阻塞开销极小）
-            int timeout = plugin.getConfigManager().loginTimeout();
+            ConfigManager cfg = plugin.getConfigManager();
+            int timeout = isLogin ? cfg.loginTimeout() : cfg.registerTimeout();
             if (timeout <= 0) {
                 session.latch.await();
             } else {

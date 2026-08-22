@@ -268,7 +268,7 @@ public final class HTLoginCommand {
                 auth.addPendingLogin(online);
                 online.sendMessage(HTLogin.legacy(I18n.get("listener.please_login", online)));
                 plugin.getPlayerListener().scheduleReminder(online, true);
-                plugin.getPlayerListener().scheduleLoginTimeout(online);
+                plugin.getPlayerListener().scheduleLoginTimeout(online, true);
             }
         });
         return Command.SINGLE_SUCCESS;

@@ -149,7 +149,7 @@ public final class PlayerListener implements Listener {
         player.sendMessage(HTLogin.legacy(I18n.get(
                 hasAccount ? "listener.please_login" : "listener.please_register", player)));
         scheduleReminder(player, hasAccount);
-        scheduleLoginTimeout(player);
+        scheduleLoginTimeout(player, hasAccount);
     }
 
     /**
@@ -291,9 +291,11 @@ public final class PlayerListener implements Listener {
         }
     }
 
-    /** 启动登录超时踢出任务（onJoin 和 forceRegister 共用，重复调用会自动作废旧任务） */
-    public void scheduleLoginTimeout(Player player) {
+    /** 启动登录/注册超时踢出任务（onJoin 和 forceRegister 共用，重复调用会自动作废旧任务）
+     *  @param needsLogin true = 登录超时（login.timeout），false = 注册超时（register.timeout） */
+    public void scheduleLoginTimeout(Player player, boolean needsLogin) {
         int timeout = plugin.getConfigManager().loginTimeout();
+        if (!needsLogin) timeout = plugin.getConfigManager().registerTimeout();
         if (timeout <= 0) return;
 
         // 记录启动时间，触发时校验是否为最新任务（forceRegister 重启超时后旧任务自动失效）

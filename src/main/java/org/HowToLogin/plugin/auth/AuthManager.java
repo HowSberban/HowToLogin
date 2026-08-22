@@ -340,13 +340,12 @@ public final class AuthManager {
         return true;
     }
 
-    /** 开始双因素设置：生成临时密钥（confirm 通过后才持久化），返回给玩家添加到认证器应用 */
+    /** 开始双因素设置：返回待绑定密钥（confirm 通过后才持久化）
+     *  已有未绑定的临时密钥则复用，避免重复执行 /2fa setup 时密钥被覆盖导致旧密钥失效 */
     public String setup2fa(Player player) {
         UUID uuid = player.getUniqueId();
         if (has2fa(uuid)) return null;
-        String secret = Totp.generateSecret();
-        pending2faSecret.put(uuid, secret);
-        return secret;
+        return pending2faSecret.computeIfAbsent(uuid, u -> Totp.generateSecret());
     }
 
     /** 确认双因素绑定：验证码通过后持久化临时密钥 */

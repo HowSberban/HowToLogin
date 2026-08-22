@@ -31,7 +31,7 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
-    // Dialog API 构建器：服务端不支持（<1.21.11）时为 null
+    // Dialog API 构建器：开关关闭或服务端不支持（<1.21.11）时为 null，pre-join 与游戏内 2FA 绑定均回退
     private DialogManager dialogManager;
     // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退聊天栏提示
     private PreJoinAuthListener preJoinAuthListener;
@@ -48,10 +48,13 @@ public final class HTLogin extends JavaPlugin {
         this.configManager = new ConfigManager(this);
         this.playerDataManager = new PlayerDataManager(this);
         this.authManager = new AuthManager(this, playerDataManager, configManager);
-        // Dialog 登录界面：服务端支持（1.21.6+）且版本满足（1.21.11+）时启用
+        // Dialog 登录界面：开关开启且服务端支持（1.21.6+）且版本满足（1.21.11+）时启用
         // 1.21.6–1.21.10 存在未验证的兼容问题（Paper #13365/#13708），默认禁用，
         // 经 login.dialog.allow-risky-versions 强制启用时由使用者自担风险
-        if (DialogManager.isSupported() && (preJoinSupported() || configManager.dialogAllowRiskyVersions())) {
+        // dialogManager 为 null 时 pre-join 与游戏内 2FA 绑定均回退聊天栏/文本
+        if (configManager.loginDialogEnabled()
+                && DialogManager.isSupported()
+                && (preJoinSupported() || configManager.dialogAllowRiskyVersions())) {
             this.dialogManager = new DialogManager(this);
             this.preJoinAuthListener = new PreJoinAuthListener(this, authManager, dialogManager);
             getServer().getPluginManager().registerEvents(preJoinAuthListener, this);

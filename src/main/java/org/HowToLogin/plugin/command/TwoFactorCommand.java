@@ -9,6 +9,7 @@ import io.papermc.paper.registry.data.dialog.action.DialogActionCallback;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
+import net.kyori.adventure.text.format.TextColor;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
@@ -143,9 +144,10 @@ public final class TwoFactorCommand {
                 + "&issuer=" + java.net.URLEncoder.encode(issuer, java.nio.charset.StandardCharsets.UTF_8);
     }
 
-    /** 可点击复制组件：内容即展示文本，悬停提示"点击复制"，点击复制到剪贴板 */
+    /** 可点击复制组件：金色突出提示可点击，内容即展示文本，点击复制到剪贴板 */
     private static Component clickToCopy(String content, Player player) {
         return Component.text(content)
+                .color(TextColor.color(0xFFAA00))
                 .hoverEvent(HoverEvent.showText(msg(player, "2fa.click_to_copy")))
                 .clickEvent(ClickEvent.copyToClipboard(content));
     }

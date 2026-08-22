@@ -25,7 +25,7 @@ database:
 
 # 登录设置
 login:
-  # 登录/注册超时时间（秒），0 = 不限制
+  # 登录超时时间（秒），0 = 不限制
   timeout: 120
   # 超时未登录是否踢出玩家
   kick-on-timeout: true
@@ -67,8 +67,10 @@ login:
     # 认证器应用中显示的发行方名称
     issuer: HTLogin
 
-# 注册限制
+# 注册设置
 register:
+  # 注册超时时间（秒），0 = 不限制
+  timeout: 120
   # 同一 IP 最大账号数量，0 = 不限制
   max-accounts-per-ip: 3
 

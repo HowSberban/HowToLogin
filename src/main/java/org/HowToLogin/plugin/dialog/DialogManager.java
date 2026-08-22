@@ -10,6 +10,7 @@ import io.papermc.paper.registry.data.dialog.input.DialogInput;
 import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
+import net.kyori.adventure.text.format.TextColor;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 
@@ -93,7 +94,9 @@ public final class DialogManager {
                                    DialogActionCallback onConfirm, DialogActionCallback onCancel) {
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
-        body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label", secret)));
+        // 密钥行：前缀 + 金色密钥，突出可点击复制的提示
+        body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
+                .append(Component.text(secret).color(TextColor.color(0xFFAA00)))));
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
         if (error != null) {
             body.add(DialogBody.plainMessage(error));
