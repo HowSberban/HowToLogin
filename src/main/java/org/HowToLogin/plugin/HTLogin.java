@@ -160,9 +160,9 @@ public final class HTLogin extends JavaPlugin {
         this.playerInjector = new PlayerInjector(this);
         PacketEvents.getAPI().getEventManager()
                 .registerListener(new ConnectionHandler(this, dataService, mojangClient, playerInjector, authManager));
-        // 预热 Mojang 连接：正版验证开启或已有正版账号时（premium=1 玩家始终验证，与开关无关）
+        // 启动时异步探测代理/镜像可用性（不阻塞启动），使用时跳过不可用端点
         if (configManager.premiumEnabled() || playerDataManager.hasPremiumAccount()) {
-            mojangClient.warmUp();
+            mojangClient.probeAll();
         }
     }
 

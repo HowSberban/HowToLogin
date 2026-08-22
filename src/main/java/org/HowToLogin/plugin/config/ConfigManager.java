@@ -7,7 +7,10 @@ import org.howtologin.plugin.I18n;
 
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -100,7 +103,15 @@ public final class ConfigManager {
     private boolean premiumEnabled;
     // 新玩家自动正版验证：关闭时新玩家直接离线进入，仅 /upgrade 标记的玩家验证
     private boolean premiumAutoVerify;
+    // HTTP 出站代理列表（host:port）：借道代理访问真正的 Mojang 官方验证服务器
+    private List<Proxy> premiumHttpProxies;
+    // 会话验证镜像服务器列表（完整 URL）：实现 hasJoined 接口的替代服务器，作为代理的备选
+    private List<String> premiumSessionServerMirrors;
+    // Mojang 官方会话验证服务器地址（首选，硬编码）
+    private static final String DEFAULT_SESSION_SERVER_URL = "https://sessionserver.mojang.com";
     private int premiumTimeoutSeconds;
+    // hasJoined 验证总时限（毫秒）：含候选服务器切换，超时即终止验证
+    private int premiumVerifyDeadlineMs;
     private int premiumCrackerCacheSeconds;
     // 加密握手阶段等待 EncryptionResponse 的超时（毫秒），防止恶意客户端滞留会话
     private int premiumHandshakeTimeoutMs;
@@ -311,7 +322,37 @@ public final class ConfigManager {
         // 正版验证
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
         this.premiumAutoVerify = config.getBoolean("premium.auto-verify", true);
+        // HTTP 出站代理列表（host:port）：借道代理访问真正的 Mojang 官方验证服务器。
+        // 非法项（格式错误）仅告警、不删除配置——节点可能出错或临时不可用，保留便于排查
+        List<Proxy> httpProxies = new ArrayList<>();
+        for (String raw : config.getStringList("premium.http-proxies")) {
+            String entry = raw == null ? "" : raw.trim();
+            if (entry.isEmpty()) continue;
+            Proxy proxy = parseHttpProxy(entry);
+            if (proxy == null) {
+                plugin.getLogger().warning(I18n.get("log.config_http_proxy_invalid", entry));
+            } else {
+                httpProxies.add(proxy);
+            }
+        }
+        this.premiumHttpProxies = List.copyOf(httpProxies);
+        // 会话验证镜像服务器列表（完整 URL）：实现 hasJoined 接口的替代服务器，作为代理的备选。
+        // 非法项（非 http/https 开头）仅告警、不删除配置——节点可能出错或临时不可用，保留便于排查
+        List<String> mirrors = new ArrayList<>();
+        for (String raw : config.getStringList("premium.session-server-mirrors")) {
+            String url = raw == null ? "" : raw.trim();
+            if (url.isEmpty()) continue;
+            if (url.startsWith("http://") || url.startsWith("https://")) {
+                // 去除末尾斜杠，保证拼接路径正确
+                mirrors.add(url.endsWith("/") ? url.substring(0, url.length() - 1) : url);
+            } else {
+                plugin.getLogger().warning(I18n.get("log.config_session_mirror_invalid", url));
+            }
+        }
+        this.premiumSessionServerMirrors = List.copyOf(mirrors);
         this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 10), 1);
+        // 验证总时限：默认 25 秒，须小于客户端"通讯加密中"等待上限（30 秒），避免服务端验证超时后客户端已主动断开
+        this.premiumVerifyDeadlineMs = clampInt("premium.verify-deadline-ms", config.getInt("premium.verify-deadline-ms", 25000), 1000);
         this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);
         this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
         this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
@@ -377,6 +418,21 @@ public final class ConfigManager {
         String[] parts = base.split("\\.");
         if (parts.length >= 2) return parts[0] + "." + parts[1];
         return base;
+    }
+
+    /** 解析 HTTP 出站代理条目（host:port），格式非法返回 null */
+    private static Proxy parseHttpProxy(String entry) {
+        int colon = entry.lastIndexOf(':');
+        if (colon <= 0 || colon == entry.length() - 1) return null;
+        String host = entry.substring(0, colon);
+        int port;
+        try {
+            port = Integer.parseInt(entry.substring(colon + 1));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        if (port < 1 || port > 65535) return null;
+        return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port));
     }
 
     /** 整型配置校验：低于下限时调整为下限并告警，避免非法值导致运行时异常 */
@@ -477,7 +533,17 @@ public final class ConfigManager {
     // 正版验证
     public boolean premiumEnabled() { return premiumEnabled; }
     public boolean premiumAutoVerify() { return premiumAutoVerify; }
+    /** HTTP 出站代理列表（借道访问真正的 Mojang 官方验证服务器），验证时优先使用 */
+    public List<Proxy> premiumHttpProxies() { return premiumHttpProxies; }
+    /** 会话验证镜像候选列表：官方地址（硬编码）在首位，其后为配置的镜像，代理均不可用时依次尝试 */
+    public List<String> premiumSessionServerCandidates() {
+        List<String> candidates = new ArrayList<>(premiumSessionServerMirrors.size() + 1);
+        candidates.add(DEFAULT_SESSION_SERVER_URL);
+        candidates.addAll(premiumSessionServerMirrors);
+        return candidates;
+    }
     public int premiumTimeoutSeconds() { return premiumTimeoutSeconds; }
+    public int premiumVerifyDeadlineMs() { return premiumVerifyDeadlineMs; }
     public int premiumCrackerCacheSeconds() { return premiumCrackerCacheSeconds; }
     public int premiumHandshakeTimeoutMs() { return premiumHandshakeTimeoutMs; }
     public int premiumMaxRetries() { return premiumMaxRetries; }

@@ -163,8 +163,19 @@ premium:
   # 新玩家自动正版验证：开启时新进服玩家自动尝试正版验证
   # 关闭时新玩家直接以离线身份进入，仅通过 /upgrade 进行升级
   auto-verify: true
-  # hasJoined HTTP 超时（秒），超时视为 Mojang 服务不可用
+  # HTTP 出站代理列表
+  # 服务器无法直连 Mojang 时优先配置此项，验证仍由 Mojang 官方完成
+  http-proxies:
+    - 'example.com:25565'
+  # Mojang 会话验证镜像服务器列表
+  # 注意：镜像为第三方服务，验证结果可信度取决于镜像本身，请仅使用可信镜像
+  session-server-mirrors:
+    - 'https://mirror.example.com'
+  # hasJoined 单次 HTTP 请求超时（秒）
   timeout-seconds: 10
+  # hasJoined 验证总时限（毫秒）：含候选服务器切换与重试，超时即终止验证
+  # 默认情况下客户端在 30 秒内未收到响应会主动断开，值不应当高于 30000
+  verify-deadline-ms: 30000
   # 离线客户端首次失败后的重连缓存有效期（秒）
   # 检测到离线客户端后标记 IP+名，有效期内重连直接离线登录
   cracker-cache-seconds: 120
