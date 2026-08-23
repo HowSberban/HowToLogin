@@ -104,11 +104,16 @@ public final class TwoFactorCommand {
             return Command.SINGLE_SUCCESS;
         }
         // 回退（不支持 Dialog）：合成可点击组件，密钥点击即复制
-        player.sendMessage(Component.empty()
+        Component message = Component.empty()
                 .append(msg(player, "2fa.setup_title")).appendNewline()
                 .append(msg(player, "2fa.setup_hint")).appendNewline()
-                .append(clickToCopy(secret, player)).appendNewline()
-                .append(msg(player, "2fa.setup_confirm")));
+                .append(clickToCopy(secret, player));
+        // 有限时配置时追加红色过期提醒
+        Component expire = expireReminder(player);
+        if (expire != null) {
+            message = message.appendNewline().append(expire);
+        }
+        player.sendMessage(message.appendNewline().append(msg(player, "2fa.setup_confirm")));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -133,6 +138,13 @@ public final class TwoFactorCommand {
                 showSetupDialog(player, secret, msg(player, "2fa.confirm_incorrect"));
             }
         };
+    }
+
+    /** 红色过期提醒组件：配置为 0（永不过期）时返回 null */
+    private Component expireReminder(Player player) {
+        int seconds = plugin.getConfigManager().twoFactorTempSecretExpireSeconds();
+        if (seconds <= 0) return null;
+        return HTLogin.legacy(I18n.get("2fa.setup_expire", player, seconds));
     }
 
     /** 可点击复制组件：金色突出提示可点击，内容即展示文本，点击复制到剪贴板 */

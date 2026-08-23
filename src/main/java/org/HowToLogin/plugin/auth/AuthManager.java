@@ -17,11 +17,14 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 public final class AuthManager {
@@ -48,6 +51,8 @@ public final class AuthManager {
     private final Set<UUID> pending2fa = ConcurrentHashMap.newKeySet();
     // 双因素设置中的临时密钥：confirm 验证通过后才持久化
     private final Map<UUID, String> pending2faSecret = new ConcurrentHashMap<>();
+    // 临时密钥的创建时间戳：用于按配置时长过期清理（与 pending2faSecret 一一对应）
+    private final Map<UUID, Long> pending2faSecretCreatedAt = new ConcurrentHashMap<>();
     // 登录后传送过渡期：玩家已登录但还在传送到退出位置，期间保持无敌
     private final Set<UUID> invulnerablePending = ConcurrentHashMap.newKeySet();
     // 标记当前会话被设为旁观的玩家：onLoginSuccess 仅对这些玩家恢复游戏模式，
@@ -82,6 +87,9 @@ public final class AuthManager {
         this.dataManager = dataManager;
         this.configManager = configManager;
         this.newWorldStructure = detectNewWorldStructure();
+        // 周期清理过期的 2FA 临时密钥（懒清理兜底，随插件关闭统一取消）
+        Bukkit.getAsyncScheduler().runAtFixedRate(plugin, task -> cleanupExpired2faSecrets(),
+                1, 30, TimeUnit.SECONDS);
     }
 
     /**
@@ -341,25 +349,67 @@ public final class AuthManager {
     }
 
     /** 开始双因素设置：返回待绑定密钥（confirm 通过后才持久化）
-     *  已有未绑定的临时密钥则复用，避免重复执行 /2fa setup 时密钥被覆盖导致旧密钥失效 */
+     *  已有未绑定的临时密钥则复用，避免重复执行 /2fa setup 时密钥被覆盖导致旧密钥失效
+     *  复用前先清理已过期的旧密钥，避免复用过期密钥后无法 confirm */
     public String setup2fa(Player player) {
         UUID uuid = player.getUniqueId();
         if (has2fa(uuid)) return null;
-        return pending2faSecret.computeIfAbsent(uuid, u -> Totp.generateSecret());
+        removeExpired2faSecret(uuid);
+        return pending2faSecret.computeIfAbsent(uuid, u -> {
+            String secret = Totp.generateSecret();
+            pending2faSecretCreatedAt.put(uuid, System.currentTimeMillis());
+            return secret;
+        });
     }
 
-    /** 确认双因素绑定：验证码通过后持久化临时密钥 */
+    /** 确认双因素绑定：验证码通过后持久化临时密钥（临时密钥已过期则作废） */
     public boolean confirm2fa(Player player, String code) {
         UUID uuid = player.getUniqueId();
+        removeExpired2faSecret(uuid);
         String secret = pending2faSecret.get(uuid);
         if (secret == null) return false;
         if (!Totp.verifyCode(secret, code)) return false;
-        pending2faSecret.remove(uuid);
+        clearPending2faSecret(uuid);
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
         data.totpSecret(secret);
         dataManager.save(uuid);
         return true;
+    }
+
+    /** 临时密钥是否已超期（配置为 0 时永不过期） */
+    private boolean isExpired2faSecret(long created) {
+        int seconds = configManager.twoFactorTempSecretExpireSeconds();
+        return seconds > 0 && System.currentTimeMillis() - created >= seconds * 1000L;
+    }
+
+    /** 移除过期临时密钥（setup/confirm 前调用，懒清理） */
+    private void removeExpired2faSecret(UUID uuid) {
+        Long created = pending2faSecretCreatedAt.get(uuid);
+        if (created != null && isExpired2faSecret(created)) {
+            clearPending2faSecret(uuid);
+        }
+    }
+
+    /** 清理单个玩家的临时密钥及创建时间戳 */
+    private void clearPending2faSecret(UUID uuid) {
+        pending2faSecret.remove(uuid);
+        pending2faSecretCreatedAt.remove(uuid);
+    }
+
+    /** 周期清理所有过期的临时密钥（异步调度器调用） */
+    private void cleanupExpired2faSecrets() {
+        int seconds = configManager.twoFactorTempSecretExpireSeconds();
+        if (seconds <= 0) return;
+        long limit = seconds * 1000L;
+        long now = System.currentTimeMillis();
+        List<UUID> expired = new ArrayList<>();
+        pending2faSecretCreatedAt.forEach((uuid, created) -> {
+            if (now - created >= limit) expired.add(uuid);
+        });
+        for (UUID uuid : expired) {
+            clearPending2faSecret(uuid);
+        }
     }
 
     /** 关闭双因素认证：需验证当前 TOTP 验证码（而非密码——2FA 正是防密码泄漏，解绑也须持有验证器） */
@@ -550,7 +600,7 @@ public final class AuthManager {
         loggedIn.remove(uuid);
         pendingLogin.remove(uuid);
         pending2fa.remove(uuid);
-        pending2faSecret.remove(uuid);
+        clearPending2faSecret(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);
@@ -747,7 +797,7 @@ public final class AuthManager {
         verifying.remove(uuid);
         // 清除双因素认证会话状态（未完成验证即退出）
         pending2fa.remove(uuid);
-        pending2faSecret.remove(uuid);
+        clearPending2faSecret(uuid);
         // 清除传送过渡期标记，防止下次登录时错误无敌
         invulnerablePending.remove(uuid);
         // 清除旁观标记（未登录退出时防止下次登录误恢复游戏模式）

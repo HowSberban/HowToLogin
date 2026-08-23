@@ -55,7 +55,7 @@ public final class UnregisterCommand {
             UUID targetUuid = target.getUniqueId();
 
             if (!authManager.unregister(targetUuid)) {
-                sender.sendMessage(HTLogin.legacy(I18n.get("unregister.not_found", sender)));
+                sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_not_found", sender)));
                 return;
             }
 

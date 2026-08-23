@@ -99,12 +99,19 @@ public final class DialogManager {
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
                 .append(Component.text(secret).color(HIGHLIGHT_COLOR))));
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
+        // 有限时配置时追加红色过期提醒
+        int expireSeconds = plugin.getConfigManager().twoFactorTempSecretExpireSeconds();
+        if (expireSeconds > 0) {
+            body.add(DialogBody.plainMessage(text(locale, "2fa.setup_expire", expireSeconds)));
+        }
         if (error != null) {
             body.add(DialogBody.plainMessage(error));
         }
         DialogBase base = DialogBase.builder(text(locale, "dialog.setup.title"))
                 .canCloseWithEscape(true)
-                // NONE：动作后不自动关闭，复制不关窗；取消/确认由各自回调 closeDialog
+                // 非暂停 + NONE：动作后不自动关闭，复制不关窗；取消/确认由各自回调 closeDialog
+                //（暂停游戏的 dialog 要求 after_action 必须能解除暂停，故此处必须 pause(false)）
+                .pause(false)
                 .afterAction(DialogBase.DialogAfterAction.NONE)
                 .body(body)
                 .inputs(List.of(codeInput(locale)))

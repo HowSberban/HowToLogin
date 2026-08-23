@@ -61,6 +61,8 @@ public final class ConfigManager {
     private boolean ipChangeNotifyEnabled;
     // 双因素认证：全局开关（关闭后已绑定玩家跳过验证，密钥保留）
     private boolean twoFactorEnabled;
+    // 绑定时临时密钥的有效期（秒），0 = 永不过期
+    private int twoFactorTempSecretExpireSeconds;
 
     // 密码规则
     private int minPasswordLength;
@@ -231,6 +233,8 @@ public final class ConfigManager {
         this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify.enabled", true);
         // 双因素认证
         this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
+        this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
+                config.getInt("login.2fa.expire-seconds", 180), 0);
 
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
@@ -494,6 +498,7 @@ public final class ConfigManager {
     public boolean dialogAllowRiskyVersions() { return dialogAllowRiskyVersions; }
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
     public boolean twoFactorEnabled() { return twoFactorEnabled; }
+    public int twoFactorTempSecretExpireSeconds() { return twoFactorTempSecretExpireSeconds; }
 
     // 密码规则
     public int minPasswordLength() { return minPasswordLength; }
