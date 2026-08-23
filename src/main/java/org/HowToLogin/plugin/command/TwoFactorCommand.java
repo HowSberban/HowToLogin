@@ -102,12 +102,14 @@ public final class TwoFactorCommand {
             return Command.SINGLE_SUCCESS;
         }
         String secret = authManager.setup2fa(player);
+        // 扫码 URL 只与密钥和配置相关，绑定会话期间不变，算一次复用
+        String url = qrUrl(player, secret);
         if (dialogManager != null) {
             // 使用对话框时不再弹聊天栏消息，避免重复刷屏
-            showSetupDialog(player, secret, qrUrl(player, secret), null);
+            showSetupDialog(player, secret, url, null);
         } else {
             // 服务端不支持 Dialog（<1.21.11/未启用）：回退聊天栏展示密钥与完成指引
-            player.sendMessage(buildSetupMessage(player, secret, qrUrl(player, secret)));
+            player.sendMessage(buildSetupMessage(player, secret, url));
         }
         return Command.SINGLE_SUCCESS;
     }
@@ -133,14 +135,14 @@ public final class TwoFactorCommand {
     /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消关闭窗口，复制不关闭 */
     private void showSetupDialog(Player player, String secret, String qrUrl, Component error) {
         player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, qrUrl, error,
-                setupOnConfirm(player, secret), CANCEL));
+                setupOnConfirm(player, secret, qrUrl), CANCEL));
     }
 
-    private DialogActionCallback setupOnConfirm(Player player, String secret) {
+    private DialogActionCallback setupOnConfirm(Player player, String secret, String qrUrl) {
         return (returnValue, audience) -> {
             String code = returnValue.getText("code");
             if (code == null || code.isEmpty()) {
-                showSetupDialog(player, secret, qrUrl(player, secret), msg(player, "dialog.empty_code"));
+                showSetupDialog(player, secret, qrUrl, msg(player, "dialog.empty_code"));
                 return;
             }
             if (authManager.confirm2fa(player, code)) {
@@ -148,22 +150,19 @@ public final class TwoFactorCommand {
                 // 绑定成功即关闭窗口
                 audience.closeDialog();
             } else {
-                showSetupDialog(player, secret, qrUrl(player, secret), msg(player, "2fa.confirm_incorrect"));
+                showSetupDialog(player, secret, qrUrl, msg(player, "2fa.confirm_incorrect"));
             }
         };
     }
 
-    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符或留空时返回 null（对话框省略扫码按钮） */
+    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符或留空时返回 null（省略扫码入口） */
     private String qrUrl(Player player, String secret) {
         String template = plugin.getConfigManager().twoFactorQrUrl();
         if (template == null || template.isEmpty() || !template.contains("{data}")) return null;
-        // otpauth 资料：账号 + 密钥，交给二维码服务生成图片
-        String data = "otpauth://totp/" + enc(player.getName()) + "?secret=" + enc(secret);
-        return template.replace("{data}", enc(data));
-    }
-
-    private static String enc(String s) {
-        return URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
+        // otpauth 资料：账号 + 密钥，拼好后整体编码一次（与 AuthMe 一致），交给二维码服务生成图片
+        String data = "otpauth://totp/" + player.getName() + "?secret=" + secret;
+        String encoded = URLEncoder.encode(data, StandardCharsets.UTF_8).replace("+", "%20");
+        return template.replace("{data}", encoded);
     }
 
     /** 红色过期提醒组件：配置为 0（永不过期）时返回 null */
