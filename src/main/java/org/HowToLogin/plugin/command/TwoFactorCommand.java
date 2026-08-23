@@ -13,7 +13,10 @@ import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.dialog.DialogManager;
+import org.howtologin.plugin.util.QrRenderer;
 import org.bukkit.entity.Player;
+
+import java.util.List;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
 import static io.papermc.paper.command.brigadier.Commands.literal;
@@ -99,11 +102,17 @@ public final class TwoFactorCommand {
             return Command.SINGLE_SUCCESS;
         }
         String secret = authManager.setup2fa(player);
+        // 聊天消息不含 QR（避免刷屏）；二维码仅展示在对话框内
+        player.sendMessage(buildSetupMessage(player, secret));
         if (dialogManager != null) {
-            showSetupDialog(player, secret, null);
-            return Command.SINGLE_SUCCESS;
+            showSetupDialog(player, secret,
+                    QrRenderer.render(QrRenderer.buildOtpUri(player.getName(), secret, "HTLogin")), null);
         }
-        // 回退（不支持 Dialog）：合成可点击组件，密钥点击即复制
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** 合成 /2fa setup 的聊天消息：标题 + 提示 + 可复制密钥 + [过期提醒] + 完成指引 */
+    private Component buildSetupMessage(Player player, String secret) {
         Component message = Component.empty()
                 .append(msg(player, "2fa.setup_title")).appendNewline()
                 .append(msg(player, "2fa.setup_hint")).appendNewline()
@@ -113,13 +122,12 @@ public final class TwoFactorCommand {
         if (expire != null) {
             message = message.appendNewline().append(expire);
         }
-        player.sendMessage(message.appendNewline().append(msg(player, "2fa.setup_confirm")));
-        return Command.SINGLE_SUCCESS;
+        return message.appendNewline().append(msg(player, "2fa.setup_confirm"));
     }
 
     /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消关闭窗口，复制不关闭 */
-    private void showSetupDialog(Player player, String secret, Component error) {
-        player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, error,
+    private void showSetupDialog(Player player, String secret, List<String> qrRows, Component error) {
+        player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, qrRows, error,
                 setupOnConfirm(player, secret), CANCEL));
     }
 
@@ -127,7 +135,7 @@ public final class TwoFactorCommand {
         return (returnValue, audience) -> {
             String code = returnValue.getText("code");
             if (code == null || code.isEmpty()) {
-                showSetupDialog(player, secret, msg(player, "dialog.empty_code"));
+                showSetupDialog(player, secret, qrRowsFor(player, secret), msg(player, "dialog.empty_code"));
                 return;
             }
             if (authManager.confirm2fa(player, code)) {
@@ -135,9 +143,14 @@ public final class TwoFactorCommand {
                 // 绑定成功即关闭窗口
                 audience.closeDialog();
             } else {
-                showSetupDialog(player, secret, msg(player, "2fa.confirm_incorrect"));
+                showSetupDialog(player, secret, qrRowsFor(player, secret), msg(player, "2fa.confirm_incorrect"));
             }
         };
+    }
+
+    /** 重新生成给定玩家的二维码行（重弹对话框时复用，避免到处写死 URI 构建） */
+    private static List<String> qrRowsFor(Player player, String secret) {
+        return QrRenderer.render(QrRenderer.buildOtpUri(player.getName(), secret, "HTLogin"));
     }
 
     /** 红色过期提醒组件：配置为 0（永不过期）时返回 null */

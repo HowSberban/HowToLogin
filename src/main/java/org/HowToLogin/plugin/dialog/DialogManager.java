@@ -91,10 +91,14 @@ public final class DialogManager {
      * /2fa setup 游戏内绑定对话框：显示密钥 + 验证码输入。
      * 与 pre-join 对话框不同：取消/ESC 仅关闭窗口，不踢出玩家。
      */
-    public Dialog buildSetupDialog(String locale, String secret, Component error,
+    public Dialog buildSetupDialog(String locale, String secret, List<String> qrRows, Component error,
                                    DialogActionCallback onConfirm, DialogActionCallback onCancel) {
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
+        // 二维码：逐行加入正文（图表较长，客户端可滚动）
+        for (String row : qrRows) {
+            body.add(DialogBody.plainMessage(Component.text(row)));
+        }
         // 密钥行：前缀 + 金色密钥，突出可点击复制的提示
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
                 .append(Component.text(secret).color(HIGHLIGHT_COLOR))));
