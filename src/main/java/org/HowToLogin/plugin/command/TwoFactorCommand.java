@@ -34,8 +34,8 @@ public final class TwoFactorCommand {
     private final AuthManager authManager;
     // 游戏内绑定对话框构建器：服务端不支持 Dialog 时为 null，回退文本展示
     private final DialogManager dialogManager;
-    // 取消回调：仅关闭窗口（afterAction(CLOSE)），无副作用，可复用
-    private static final DialogActionCallback NO_OP_CANCEL = (returnValue, audience) -> {};
+    // 取消回调：仅关闭窗口（afterAction 为 NONE，手动关闭），无副作用，可复用
+    private static final DialogActionCallback CANCEL = (returnValue, audience) -> audience.closeDialog();
 
     public TwoFactorCommand(HTLogin plugin, AuthManager authManager, DialogManager dialogManager) {
         this.plugin = plugin;
@@ -112,10 +112,10 @@ public final class TwoFactorCommand {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消/ESC 仅关闭窗口 */
+    /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消关闭窗口，复制不关闭 */
     private void showSetupDialog(Player player, String secret, Component error) {
         player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, error,
-                setupOnConfirm(player, secret), NO_OP_CANCEL));
+                setupOnConfirm(player, secret), CANCEL));
     }
 
     private DialogActionCallback setupOnConfirm(Player player, String secret) {
@@ -127,6 +127,8 @@ public final class TwoFactorCommand {
             }
             if (authManager.confirm2fa(player, code)) {
                 player.sendMessage(msg(player, "2fa.confirm_success"));
+                // 绑定成功即关闭窗口
+                audience.closeDialog();
             } else {
                 showSetupDialog(player, secret, msg(player, "2fa.confirm_incorrect"));
             }

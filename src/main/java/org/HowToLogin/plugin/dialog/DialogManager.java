@@ -104,7 +104,8 @@ public final class DialogManager {
         }
         DialogBase base = DialogBase.builder(text(locale, "dialog.setup.title"))
                 .canCloseWithEscape(true)
-                .afterAction(DialogBase.DialogAfterAction.CLOSE)
+                // NONE：动作后不自动关闭，复制不关窗；取消/确认由各自回调 closeDialog
+                .afterAction(DialogBase.DialogAfterAction.NONE)
                 .body(body)
                 .inputs(List.of(codeInput(locale)))
                 .build();
