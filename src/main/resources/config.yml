@@ -67,6 +67,9 @@ login:
     # 绑定时生成的临时密钥有效期（秒），超时后作废需重新 setup
     # 0 = 永不过期
     expire-seconds: 300
+    # 生成二维码的服务地址模板，{data} 会被替换为 URL 编码后的 otpauth 资料
+    # 该地址会发给玩家在浏览器打开以扫码绑定，可换成其它支持该参数的服务
+    qr-url: "https://api.qrserver.com/v1/create-qr-code/?data={data}&size=200x200&ecc=M&margin=10"
 
 # 注册设置
 register:

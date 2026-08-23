@@ -88,17 +88,13 @@ public final class DialogManager {
     }
 
     /**
-     * /2fa setup 游戏内绑定对话框：显示密钥 + 验证码输入。
+     * /2fa setup 游戏内绑定对话框：密钥 + 扫码（浏览器）按钮 + 验证码输入。
      * 与 pre-join 对话框不同：取消/ESC 仅关闭窗口，不踢出玩家。
      */
-    public Dialog buildSetupDialog(String locale, String secret, List<String> qrRows, Component error,
-                                   DialogActionCallback onConfirm, DialogActionCallback onCancel) {
+    public Dialog buildSetupDialog(String locale, String secret, String qrUrl,
+                                   Component error, DialogActionCallback onConfirm, DialogActionCallback onCancel) {
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
-        // 二维码：逐行加入正文（图表较长，客户端可滚动）
-        for (String row : qrRows) {
-            body.add(DialogBody.plainMessage(Component.text(row)));
-        }
         // 密钥行：前缀 + 金色密钥，突出可点击复制的提示
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
                 .append(Component.text(secret).color(HIGHLIGHT_COLOR))));
@@ -120,14 +116,19 @@ public final class DialogManager {
                 .body(body)
                 .inputs(List.of(codeInput(locale)))
                 .build();
-        // 复制密钥 / 取消 / 确认，三列并排；exitAction null（取消由 ESC/取消按钮承担）
-        // 复制按钮用 staticAction 直接执行 ClickEvent 复制到剪贴板
-        return Dialog.create(factory -> factory.empty().base(base).type(DialogType.multiAction(List.of(
-                ActionButton.builder(text(locale, "dialog.setup_copy"))
-                        .action(DialogAction.staticAction(ClickEvent.copyToClipboard(secret)))
-                        .build(),
-                cancelButton(locale, onCancel),
-                confirmButton(locale, onConfirm)), null, 3)));
+        // 扫码（浏览器）/ 复制 / 取消 / 确认；二维码服务模板未配置时省略扫码按钮
+        List<ActionButton> buttons = new ArrayList<>();
+        if (qrUrl != null) {
+            buttons.add(ActionButton.builder(text(locale, "2fa.setup_scan"))
+                    .action(DialogAction.staticAction(ClickEvent.openUrl(qrUrl)))
+                    .build());
+        }
+        buttons.add(ActionButton.builder(text(locale, "dialog.setup_copy"))
+                .action(DialogAction.staticAction(ClickEvent.copyToClipboard(secret)))
+                .build());
+        buttons.add(cancelButton(locale, onCancel));
+        buttons.add(confirmButton(locale, onConfirm));
+        return Dialog.create(factory -> factory.empty().base(base).type(DialogType.multiAction(buttons, null, 4)));
     }
 
     /** 窗口骨架：标题 + 正文 + 可选错误行，不可 ESC 关闭，确认后自动关闭（失败由确认处理重弹） */

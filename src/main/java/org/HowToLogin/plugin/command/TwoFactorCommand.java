@@ -13,10 +13,10 @@ import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.dialog.DialogManager;
-import org.howtologin.plugin.util.QrRenderer;
 import org.bukkit.entity.Player;
 
-import java.util.List;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 import static io.papermc.paper.command.brigadier.Commands.argument;
 import static io.papermc.paper.command.brigadier.Commands.literal;
@@ -102,21 +102,26 @@ public final class TwoFactorCommand {
             return Command.SINGLE_SUCCESS;
         }
         String secret = authManager.setup2fa(player);
-        // 聊天消息不含 QR（避免刷屏）；二维码仅展示在对话框内
-        player.sendMessage(buildSetupMessage(player, secret));
         if (dialogManager != null) {
-            showSetupDialog(player, secret,
-                    QrRenderer.render(QrRenderer.buildOtpUri(player.getName(), secret, "HTLogin")), null);
+            // 使用对话框时不再弹聊天栏消息，避免重复刷屏
+            showSetupDialog(player, secret, qrUrl(player, secret), null);
+        } else {
+            // 服务端不支持 Dialog（<1.21.11/未启用）：回退聊天栏展示密钥与完成指引
+            player.sendMessage(buildSetupMessage(player, secret, qrUrl(player, secret)));
         }
         return Command.SINGLE_SUCCESS;
     }
 
-    /** 合成 /2fa setup 的聊天消息：标题 + 提示 + 可复制密钥 + [过期提醒] + 完成指引 */
-    private Component buildSetupMessage(Player player, String secret) {
+    /** 合成 /2fa setup 的聊天消息：标题 + 提示 + 可复制密钥 + [扫码链接] + [过期提醒] + 完成指引 */
+    private Component buildSetupMessage(Player player, String secret, String qrUrl) {
         Component message = Component.empty()
                 .append(msg(player, "2fa.setup_title")).appendNewline()
                 .append(msg(player, "2fa.setup_hint")).appendNewline()
                 .append(clickToCopy(secret, player));
+        // 二维码服务模板可用时附上可点击的扫码链接
+        if (qrUrl != null) {
+            message = message.appendNewline().append(clickToOpen(qrUrl, player));
+        }
         // 有限时配置时追加红色过期提醒
         Component expire = expireReminder(player);
         if (expire != null) {
@@ -126,8 +131,8 @@ public final class TwoFactorCommand {
     }
 
     /** 弹游戏内 2FA 绑定对话框，error 为上次校验失败的提示（首次为 null）；取消关闭窗口，复制不关闭 */
-    private void showSetupDialog(Player player, String secret, List<String> qrRows, Component error) {
-        player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, qrRows, error,
+    private void showSetupDialog(Player player, String secret, String qrUrl, Component error) {
+        player.showDialog(dialogManager.buildSetupDialog(player.locale().toString(), secret, qrUrl, error,
                 setupOnConfirm(player, secret), CANCEL));
     }
 
@@ -135,7 +140,7 @@ public final class TwoFactorCommand {
         return (returnValue, audience) -> {
             String code = returnValue.getText("code");
             if (code == null || code.isEmpty()) {
-                showSetupDialog(player, secret, qrRowsFor(player, secret), msg(player, "dialog.empty_code"));
+                showSetupDialog(player, secret, qrUrl(player, secret), msg(player, "dialog.empty_code"));
                 return;
             }
             if (authManager.confirm2fa(player, code)) {
@@ -143,14 +148,22 @@ public final class TwoFactorCommand {
                 // 绑定成功即关闭窗口
                 audience.closeDialog();
             } else {
-                showSetupDialog(player, secret, qrRowsFor(player, secret), msg(player, "2fa.confirm_incorrect"));
+                showSetupDialog(player, secret, qrUrl(player, secret), msg(player, "2fa.confirm_incorrect"));
             }
         };
     }
 
-    /** 重新生成给定玩家的二维码行（重弹对话框时复用，避免到处写死 URI 构建） */
-    private static List<String> qrRowsFor(Player player, String secret) {
-        return QrRenderer.render(QrRenderer.buildOtpUri(player.getName(), secret, "HTLogin"));
+    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符或留空时返回 null（对话框省略扫码按钮） */
+    private String qrUrl(Player player, String secret) {
+        String template = plugin.getConfigManager().twoFactorQrUrl();
+        if (template == null || template.isEmpty() || !template.contains("{data}")) return null;
+        // otpauth 资料：账号 + 密钥，交给二维码服务生成图片
+        String data = "otpauth://totp/" + enc(player.getName()) + "?secret=" + enc(secret);
+        return template.replace("{data}", enc(data));
+    }
+
+    private static String enc(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     /** 红色过期提醒组件：配置为 0（永不过期）时返回 null */
@@ -166,6 +179,14 @@ public final class TwoFactorCommand {
                 .color(DialogManager.HIGHLIGHT_COLOR)
                 .hoverEvent(HoverEvent.showText(msg(player, "2fa.click_to_copy")))
                 .clickEvent(ClickEvent.copyToClipboard(content));
+    }
+
+    /** 可点击打开扫码网页的组件：金色文本，点击在浏览器打开二维码页 */
+    private static Component clickToOpen(String url, Player player) {
+        return msg(player, "2fa.setup_scan")
+                .color(DialogManager.HIGHLIGHT_COLOR)
+                .hoverEvent(HoverEvent.showText(msg(player, "2fa.click_to_open")))
+                .clickEvent(ClickEvent.openUrl(url));
     }
 
     /** /2fa confirm <验证码>：验证码通过后完成绑定 */

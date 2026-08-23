@@ -63,6 +63,8 @@ public final class ConfigManager {
     private boolean twoFactorEnabled;
     // 绑定时临时密钥的有效期（秒），0 = 永不过期
     private int twoFactorTempSecretExpireSeconds;
+    // 生成二维码的服务地址模板，{data} 占位符会被替换为 URL 编码后的 otpauth 资料
+    private String twoFactorQrUrl;
 
     // 密码规则
     private int minPasswordLength;
@@ -113,6 +115,8 @@ public final class ConfigManager {
     private List<String> premiumSessionServerMirrors;
     // Mojang 官方会话验证服务器地址（首选，硬编码）
     private static final String DEFAULT_SESSION_SERVER_URL = "https://sessionserver.mojang.com";
+    // 2FA 二维码服务默认地址模板（{data} 替换为 URL 编码后的 otpauth 资料）
+    private static final String DEFAULT_QR_URL = "https://api.qrserver.com/v1/create-qr-code/?data={data}&size=200x200&ecc=M&margin=10";
     private int premiumTimeoutSeconds;
     // hasJoined 验证总时限（毫秒）：含候选服务器切换，超时即终止验证
     private int premiumVerifyDeadlineMs;
@@ -235,6 +239,7 @@ public final class ConfigManager {
         this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
         this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
                 config.getInt("login.2fa.expire-seconds", 180), 0);
+        this.twoFactorQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
 
         // 密码规则
         this.minPasswordLength = config.getInt("password.min-length", 6);
@@ -499,6 +504,7 @@ public final class ConfigManager {
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
     public boolean twoFactorEnabled() { return twoFactorEnabled; }
     public int twoFactorTempSecretExpireSeconds() { return twoFactorTempSecretExpireSeconds; }
+    public String twoFactorQrUrl() { return twoFactorQrUrl; }
 
     // 密码规则
     public int minPasswordLength() { return minPasswordLength; }
