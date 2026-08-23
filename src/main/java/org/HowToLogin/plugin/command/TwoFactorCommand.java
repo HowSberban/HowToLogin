@@ -155,10 +155,10 @@ public final class TwoFactorCommand {
         };
     }
 
-    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符或留空时返回 null（省略扫码入口） */
+    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符（含空值）时返回 null（省略扫码入口） */
     private String qrUrl(Player player, String secret) {
         String template = plugin.getConfigManager().twoFactorQrUrl();
-        if (template == null || template.isEmpty() || !template.contains("{data}")) return null;
+        if (template == null || !template.contains("{data}")) return null;
         // otpauth 资料：账号 + 密钥，拼好后整体编码一次（与 AuthMe 一致），交给二维码服务生成图片
         String data = "otpauth://totp/" + player.getName() + "?secret=" + secret;
         String encoded = URLEncoder.encode(data, StandardCharsets.UTF_8).replace("+", "%20");
