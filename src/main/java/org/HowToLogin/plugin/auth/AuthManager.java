@@ -108,28 +108,16 @@ public final class AuthManager {
     }
 
     /**
-     * 检查同 IP 注册限制：已注册账号数 + 在线未注册玩家数。
-     * 防止多个未注册玩家同时进服后注册导致超限（无状态方案：
-     * 玩家退出后自动不再计入，注册成功后 hasAccount 返回 true 也不再计入）。
-     * @param uuid 待检查玩家（必须无账号）
-     * @param ip 玩家 IP
-     * @return true 允许进入，false 已超限
+     * 检查同 IP 注册数量上限：仅按已注册账号数判定，未注册玩家不占用名额。
+     * 连接阶段（拦截已满的 IP）与注册阶段（精确兜底）共用。
+     * @param ip 玩家 IP（null 视为放行）
+     * @return true 允许进入/注册，false 该 IP 已满
      */
-    public boolean checkIpRegisterLimit(UUID uuid, String ip) {
+    public boolean checkIpRegisterLimit(String ip) {
         int max = configManager.maxAccountsPerIp();
         if (max <= 0) return true;
         if (ip == null) return true;
-        int registered = dataManager.findByIp(ip).size();
-        int onlinePending = 0;
-        for (Player online : Bukkit.getOnlinePlayers()) {
-            if (online.getUniqueId().equals(uuid)) continue; // 排除自己
-            if (hasAccount(online.getUniqueId())) continue; // 已注册不计入
-            var addr = online.getAddress();
-            if (addr != null && ip.equals(addr.getAddress().getHostAddress())) {
-                onlinePending++;
-            }
-        }
-        return registered + onlinePending < max;
+        return dataManager.findByIp(ip).size() < max;
     }
 
     // Registration
@@ -146,6 +134,9 @@ public final class AuthManager {
     public boolean register(Player player, String password) {
         UUID uuid = player.getUniqueId();
         String ip = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
+        if (!checkIpRegisterLimit(ip)) {
+            return false;
+        }
         if (!createAccount(uuid, password, ip)) {
             return false;
         }
@@ -169,8 +160,11 @@ public final class AuthManager {
         return true;
     }
 
-    /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理 */
+    /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理。IP 已满时拒绝 */
     public boolean registerConfig(UUID uuid, String password, String ip) {
+        if (!checkIpRegisterLimit(ip)) {
+            return false;
+        }
         return createAccount(uuid, password, ip);
     }
 

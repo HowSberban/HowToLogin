@@ -66,12 +66,12 @@ public final class PlayerListener implements Listener {
         }
 
         // 同一 IP 账号数量限制：仅对新玩家（无账号）检查
-        // 统计已注册账号 + 在线未注册玩家，防止多人同时进服后注册超限
-        // 为什么不在注册时检查？那样不会踢出玩家，不符合直觉（个人体验）
+        // 连接层只拦截“该 IP 已注册账号数已达上限”的确定性情形，不让名额已满的 IP 涌入未注册玩家；
+        // 未注册玩家之间不互相占用名额，精确判定由注册路径（register/registerConfig）兜底
         int maxAccounts = plugin.getConfigManager().maxAccountsPerIp();
         if (maxAccounts > 0 && !authManager.hasAccount(uuid)) {
             String ip = event.getAddress().getHostAddress();
-            if (!authManager.checkIpRegisterLimit(uuid, ip)) {
+            if (!authManager.checkIpRegisterLimit(ip)) {
                 event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
                         HTLogin.legacy(I18n.get("register.ip_limit", maxAccounts)));
             }
