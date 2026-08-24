@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  * Pre-join Dialog 登录（Paper 配置阶段事件，1.21.6+）：
  * 玩家进入世界前弹窗完成登录/注册，认证成功才放行，登录前不接收任何世界信息（坐标保护天然不需要）。
  * 流程：配置阶段事件 → 弹窗阻塞等待提交 → 认证成功记录结果 → 进入世界由 onJoin 消费结果收尾。
- * 回退聊天栏提示：Dialog 未启用 / 客户端&lt;1.21.6 / 正版或 IP 免密 / 已登录；超时按 kick-on-timeout 踢出或放行收尾。
+ * 回退聊天栏提示：Dialog 未启用 / 客户端&lt;1.21.6 / 正版或 IP 免密（未绑定 2FA）/ 已登录；超时按 kick-on-timeout 踢出或放行收尾。
  */
 @SuppressWarnings("UnstableApiUsage")
 public final class PreJoinAuthListener implements Listener {
@@ -57,6 +57,8 @@ public final class PreJoinAuthListener implements Listener {
         volatile boolean fallback;
         // 注册流程完成（写在 countDown 前，由闭锁建立 happens-before）
         boolean registered;
+        // 免密登录直弹 2FA（正版/IP）：验证状态失效时重弹验证码窗口而非密码窗口
+        boolean passwordless2fa;
 
         Session(PlayerConfigurationConnection connection) {
             this.connection = connection;
@@ -94,8 +96,9 @@ public final class PreJoinAuthListener implements Listener {
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
         // 客户端是否支持配置阶段 Dialog（<1.21.6 收到 Show Dialog 包会断连，回退聊天栏提示）
         if (!supportsDialogs(uuid)) return;
-        // 正版（非回退）/ IP 免密：放行，由 onJoin 现有逻辑处理
-        if (skipAutoLogin(uuid, conn)) return;
+        // 免密登录（正版非回退/IP 一致）且登录无需 2FA：放行，由 onJoin 现有逻辑处理
+        boolean autoLogin = skipAutoLogin(uuid, conn);
+        if (autoLogin && !authManager.requires2faAtLogin(uuid)) return;
 
         Session session = new Session(conn);
         sessions.put(uuid, session);
@@ -103,7 +106,12 @@ public final class PreJoinAuthListener implements Listener {
         String locale = resolveLocale(conn);
         try {
             boolean isLogin = authManager.hasAccount(uuid);
-            if (isLogin) {
+            // 免密（正版/IP）或无密码账户：跳过密码窗口，直接验证验证码
+            if (autoLogin || (isLogin && authManager.isPasswordless(uuid))) {
+                session.passwordless2fa = true;
+                authManager.addPending2fa(uuid);
+                show2fa(session, uuid, locale, null);
+            } else if (isLogin) {
                 showLogin(session, uuid, locale, null);
             } else {
                 showRegister(session, uuid, locale, null);
@@ -134,7 +142,7 @@ public final class PreJoinAuthListener implements Listener {
         }
     }
 
-    /** 正版（非回退）或 IP 免密：配置阶段不弹窗 */
+    /** 正版（非回退）或 IP 免密：免密登录路径（是否仍需 2FA 窗口由调用方按绑定状态决定） */
     private boolean skipAutoLogin(UUID uuid, PlayerConfigurationConnection conn) {
         if (authManager.isPremium(uuid) && !authManager.isPremiumFallback(uuid)) return true;
         String ip = clientIp(conn);
@@ -286,9 +294,23 @@ public final class PreJoinAuthListener implements Listener {
     private DialogActionCallback twoFactorConfirm(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
+            // 暴力破解踢出期内断连（无密码账户验证码错误达到阈值后进入踢出期，与密码登录失败行为一致）
+            long kickRemaining = authManager.getKickRemaining(uuid);
+            if (kickRemaining > 0) {
+                session.kicked = true;
+                session.connection.disconnect(HTLogin.legacy(I18n.getForLocale("2fa.kicked", locale, kickRemaining)));
+                session.latch.countDown();
+                return;
+            }
             if (!authManager.isPending2fa(uuid)) {
-                // 密码验证状态已失效（插件重载等），回到登录窗口重新开始
-                showLogin(session, uuid, locale, null);
+                if (session.passwordless2fa) {
+                    // 免密会话验证状态失效：重新标记待验证并重弹验证码窗口（正版玩家未必知晓密码，不能回到密码窗口）
+                    authManager.addPending2fa(uuid);
+                    show2fa(session, uuid, locale, null);
+                } else {
+                    // 密码验证状态已失效（插件重载等），回到登录窗口重新开始
+                    showLogin(session, uuid, locale, null);
+                }
                 return;
             }
             String code = response.getText("code");

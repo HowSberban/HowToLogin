@@ -111,13 +111,15 @@ public final class PlayerListener implements Listener {
             // IP 不一致时需传送到退出位置
             boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
             authManager.autoLogin(player);
-            player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
-            // 首次注册/升级正版账号：发送随机明文密码并提示修改
-            String initialPassword = authManager.pollPremiumPassword(player.getUniqueId());
-            if (initialPassword != null) {
-                player.sendMessage(HTLogin.legacy(I18n.get("premium.first_join_password", initialPassword)));
+            // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，登录收尾与传送延迟到 /2fa 验证完成
+            boolean pending2fa = authManager.isPending2fa(player.getUniqueId());
+            if (pending2fa) {
+                player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                scheduleLoginTimeout(player, true);
+            } else {
+                player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
             }
-            if (!ipAutoLogin) {
+            if (!ipAutoLogin && !pending2fa) {
                 authManager.returnToLogoutLocation(player);
             }
             return;
@@ -127,8 +129,14 @@ public final class PlayerListener implements Listener {
             // 尝试 IP 免密登录：上次登录 IP 与当前一致时自动登录
             if (authManager.checkIpAutoLogin(player)) {
                 authManager.autoLogin(player);
-                player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
-                // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
+                if (authManager.isPending2fa(player.getUniqueId())) {
+                    // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，传送由 /2fa 验证完成流程处理
+                    player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                    scheduleLoginTimeout(player, true);
+                } else {
+                    // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
+                    player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
+                }
                 return;
             }
         }
@@ -142,12 +150,18 @@ public final class PlayerListener implements Listener {
      */
     public void beginAuthFlow(Player player) {
         boolean hasAccount = authManager.hasAccount(player);
+        // 无密码账户：验证码是唯一登录因素，直接进入待验证状态
+        boolean passwordless = hasAccount && authManager.isPasswordless(player.getUniqueId());
         if (hasAccount) {
             authManager.addPendingLogin(player);
         }
+        if (passwordless) {
+            authManager.addPending2fa(player.getUniqueId());
+        }
         authManager.setSpectator(player);
         player.sendMessage(HTLogin.legacy(I18n.get(
-                hasAccount ? "listener.please_login" : "listener.please_register", player)));
+                passwordless ? "login.passwordless_prompt"
+                        : hasAccount ? "listener.please_login" : "listener.please_register", player)));
         scheduleReminder(player, hasAccount);
         scheduleLoginTimeout(player, hasAccount);
     }
@@ -187,7 +201,10 @@ public final class PlayerListener implements Listener {
 
     /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
     private void sendReminder(Player player, boolean needsLogin) {
-        String key = needsLogin ? "listener.please_login" : "listener.please_register";
+        // 无密码账户提醒输入验证码而非密码
+        String key = !needsLogin ? "listener.please_register"
+                : authManager.isPasswordless(player.getUniqueId()) ? "login.passwordless_prompt"
+                : "listener.please_login";
         String method = plugin.getConfigManager().loginRemindMethod();
         switch (method) {
             case "title" -> player.showTitle(net.kyori.adventure.title.Title.title(
@@ -264,7 +281,8 @@ public final class PlayerListener implements Listener {
         String ip = clientAddr != null ? clientAddr.getHostAddress() : null;
 
         // IP 自动登录的玩家直接在退出位置出生，避免后续传送
-        if (uuid != null && authManager.checkIpAutoLogin(uuid, ip)) {
+        // 登录需 2FA 的除外：验证完成前不放行到退出位置（/2fa 验证后再传送）
+        if (uuid != null && authManager.checkIpAutoLogin(uuid, ip) && !authManager.requires2faAtLogin(uuid)) {
             Location logoutLoc = authManager.getLogoutLocation(uuid);
             if (logoutLoc != null) {
                 event.setSpawnLocation(logoutLoc);

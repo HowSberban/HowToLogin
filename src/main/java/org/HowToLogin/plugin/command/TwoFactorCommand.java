@@ -105,7 +105,7 @@ public final class TwoFactorCommand {
         // 扫码 URL 只与密钥和配置相关，绑定会话期间不变，算一次复用
         String url = qrUrl(player, secret);
         if (dialogManager != null) {
-            // 使用对话框时不再弹聊天栏消息，避免重复刷屏
+            // Dialog 可用时聊天栏完全静默，两者互斥（扫码入口在对话框按钮上）
             showSetupDialog(player, secret, url, null);
         } else {
             // 服务端不支持 Dialog（<1.21.11/未启用）：回退聊天栏展示密钥与完成指引
@@ -140,6 +140,18 @@ public final class TwoFactorCommand {
 
     private DialogActionCallback setupOnConfirm(Player player, String secret, String qrUrl) {
         return (returnValue, audience) -> {
+            // 绑定已在别处完成（如对话框确认后又跑 /2fa confirm）：直接关闭并提示
+            if (authManager.has2fa(player.getUniqueId())) {
+                audience.closeDialog();
+                player.sendMessage(msg(player, "2fa.already_enabled"));
+                return;
+            }
+            // 密钥已过期（等待期间超时）：重弹只会展示作废密钥，关闭并提示重新 setup
+            if (!authManager.hasPending2faSecret(player.getUniqueId())) {
+                audience.closeDialog();
+                player.sendMessage(msg(player, "2fa.setup_expired"));
+                return;
+            }
             String code = returnValue.getText("code");
             if (code == null || code.isEmpty()) {
                 showSetupDialog(player, secret, qrUrl, msg(player, "dialog.empty_code"));
@@ -155,8 +167,9 @@ public final class TwoFactorCommand {
         };
     }
 
-    /** 生成二维码服务 URL 供扫码按钮打开；模板缺失 {data} 占位符（含空值）时返回 null（省略扫码入口） */
+    /** 生成二维码服务 URL 供扫码按钮打开；开关关闭或模板缺失 {data} 占位符时返回 null（省略扫码入口） */
     private String qrUrl(Player player, String secret) {
+        if (!plugin.getConfigManager().twoFactorQrEnabled()) return null;
         String template = plugin.getConfigManager().twoFactorQrUrl();
         if (template == null || !template.contains("{data}")) return null;
         // otpauth 资料：账号 + 密钥，拼好后整体编码一次（与 AuthMe 一致），交给二维码服务生成图片
@@ -195,6 +208,12 @@ public final class TwoFactorCommand {
         String code = StringArgumentType.getString(ctx, "code");
         if (authManager.confirm2fa(player, code)) {
             player.sendMessage(msg(player, "2fa.confirm_success"));
+        } else if (authManager.has2fa(player.getUniqueId())) {
+            // 已绑定成功（临时密钥已清除），重复确认不提示验证码错误
+            player.sendMessage(msg(player, "2fa.already_enabled"));
+        } else if (!authManager.hasPending2faSecret(player.getUniqueId())) {
+            // 临时密钥已不在（过期被清理）：提示重新 setup 而非验证码错误
+            player.sendMessage(msg(player, "2fa.setup_expired"));
         } else {
             player.sendMessage(msg(player, "2fa.confirm_incorrect"));
         }
@@ -204,6 +223,12 @@ public final class TwoFactorCommand {
     /** /2fa disable <验证码>：验证当前验证码后关闭双因素认证 */
     private int handleDisable(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
+        // 无密码离线账户关闭 2FA 会失去唯一验证因素，须先恢复密码（正版账户有正版验证兜底）
+        // 此检查须在 blocked() 之前：开关关闭时 blocked 的提示无法给出正确指引
+        if (authManager.isPasswordless(player.getUniqueId()) && !authManager.isPremium(player)) {
+            player.sendMessage(msg(player, "2fa.disable_need_password"));
+            return Command.SINGLE_SUCCESS;
+        }
         if (blocked(player)) return Command.SINGLE_SUCCESS;
         if (!authManager.has2fa(player.getUniqueId())) {
             player.sendMessage(msg(player, "2fa.not_enabled"));
@@ -221,11 +246,18 @@ public final class TwoFactorCommand {
     /** /2fa <验证码>：登录时的双因素验证（密码已通过，等待 TOTP） */
     private int handleVerify(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
-        if (!plugin.getConfigManager().twoFactorEnabled()) {
+        // 无密码账户不受全局开关影响：验证码是其唯一登录因素
+        if (!plugin.getConfigManager().twoFactorEnabled()
+                && !authManager.isPasswordless(player.getUniqueId())) {
             player.sendMessage(msg(player, "2fa.feature_disabled"));
             return Command.SINGLE_SUCCESS;
         }
         String code = StringArgumentType.getString(ctx, "code");
+        // 暴力破解踢出期内拒绝验证（无密码账户验证码错误达到阈值后进入踢出期）
+        if (authManager.isKicked(player)) {
+            player.sendMessage(HTLogin.legacy(I18n.get("2fa.kicked", player, authManager.getKickRemaining(player))));
+            return Command.SINGLE_SUCCESS;
+        }
         if (!authManager.isPending2fa(player.getUniqueId())) {
             player.sendMessage(msg(player, "2fa.usage"));
             return Command.SINGLE_SUCCESS;

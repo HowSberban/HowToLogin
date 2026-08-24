@@ -25,9 +25,6 @@ public final class PasswordHash {
 
     private static final int SALT_LENGTH = 16;
     private static final String SHA256_ALGORITHM = "SHA-256";
-    // 随机密码字符集：数字 + 大小写字母（62 个字符）
-    private static final char[] RANDOM_ALPHABET =
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz".toCharArray();
 
     /**
      * 使用指定算法和 work factor 哈希密码。
@@ -100,24 +97,6 @@ public final class PasswordHash {
     /** 判断存储的哈希是否为 BCrypt 格式（用于自动升级判断） */
     public static boolean isBcrypt(String storedHash) {
         return storedHash != null && storedHash.startsWith("$2");
-    }
-
-    /**
-     * 生成指定长度的随机密码（数字 + 大小写字母）。
-     * 用于正版账号：正版玩家免密登录，但数据库需要非空密码哈希占位，故生成随机密码。
-     * @param length 密码长度，必须 ≥ 1
-     * @return 随机密码
-     */
-    public static String generateRandomPassword(int length) {
-        if (length < 1) {
-            throw new IllegalArgumentException("Password length must be at least 1");
-        }
-        SecureRandom random = new SecureRandom();
-        char[] password = new char[length];
-        for (int i = 0; i < length; i++) {
-            password[i] = RANDOM_ALPHABET[random.nextInt(RANDOM_ALPHABET.length)];
-        }
-        return new String(password);
     }
 
     private PasswordHash() {}

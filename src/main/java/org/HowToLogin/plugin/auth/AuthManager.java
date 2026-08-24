@@ -68,8 +68,6 @@ public final class AuthManager {
     private final Map<UUID, Long> recentUnregister = new ConcurrentHashMap<>();
     // 待升级离线账号（离线 UUID）：玩家执行升级指令后标记，下次登录时尝试正版验证
     private final Set<UUID> pendingUpgrade = ConcurrentHashMap.newKeySet();
-    // 首次注册/升级正版账号的待提示明文密码（正版 UUID → 明文）：玩家 join 时发送并移除
-    private final Map<UUID, String> pendingPremiumPassword = new ConcurrentHashMap<>();
     // 正版验证失败回退进入的正版玩家（正版 UUID）：本次需密码登录，不自动免密
     private final Set<UUID> premiumFallback = ConcurrentHashMap.newKeySet();
     // 登录超时任务启动时间戳：用于判断超时任务是否为最新（重启时旧任务自动失效）
@@ -318,6 +316,47 @@ public final class AuthManager {
         return pending2fa.contains(uuid);
     }
 
+    /** 免密登录（正版/IP）但已绑定 2FA：配置阶段直弹验证码窗口前标记待验证（verify2faConfig 以此为前置状态） */
+    public void addPending2fa(UUID uuid) {
+        pending2fa.add(uuid);
+    }
+
+    /** 是否为无密码账户（密码哈希为空，登录依赖验证码或正版验证） */
+    public boolean isPasswordless(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
+        return data != null && (data.passwordHash() == null || data.passwordHash().isEmpty());
+    }
+
+    /** 是否已绑定 2FA 密钥（不看全局开关，移除密码的资格判断用） */
+    public boolean hasTotpSecret(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
+        return data != null && data.totpSecret() != null;
+    }
+
+    /** 登录时是否必须完成 2FA 验证：已绑定密钥且（全局开关开启，或无密码账户——验证码是其必要登录因素，不受开关影响） */
+    public boolean requires2faAtLogin(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null || data.totpSecret() == null) return false;
+        return configManager.twoFactorEnabled()
+                || data.passwordHash() == null || data.passwordHash().isEmpty();
+    }
+
+    /**
+     * 移除密码，转为无密码账户。
+     * 已绑定 2FA 时验证码作为确认凭据（移除后即为唯一登录因素）。
+     * @return true 移除成功；false 验证码错误或账号不存在
+     */
+    public boolean removePassword(Player player, String code) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) return false;
+        if (data.totpSecret() != null) {
+            if (code == null || code.isEmpty() || !Totp.verifyCode(data.totpSecret(), code)) return false;
+        }
+        dataManager.updatePassword(uuid, "");
+        return true;
+    }
+
     /**
      * 完成双因素验证：校验 TOTP 验证码，通过则完成登录。
      * @return true 验证通过且登录完成
@@ -329,6 +368,10 @@ public final class AuthManager {
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) {
             // 验证失败：回到待验证状态，玩家可重试
+            // 无密码账户的验证码即唯一登录因素，失败计入暴力破解防护（与密码错误同待遇）
+            if (data.passwordHash() == null || data.passwordHash().isEmpty()) {
+                handleLoginFailure(uuid, player);
+            }
             pending2fa.add(uuid);
             return false;
         }
@@ -342,6 +385,10 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) {
+            // 无密码账户的验证码即唯一登录因素，失败计入暴力破解防护（与密码错误同待遇）
+            if (data.passwordHash() == null || data.passwordHash().isEmpty()) {
+                handleLoginFailure(uuid, null);
+            }
             pending2fa.add(uuid);
             return false;
         }
@@ -375,6 +422,12 @@ public final class AuthManager {
         data.totpSecret(secret);
         dataManager.save(uuid);
         return true;
+    }
+
+    /** 玩家的临时密钥是否已生成且未过期（供重弹绑定窗口前判断是否还有效） */
+    public boolean hasPending2faSecret(UUID uuid) {
+        removeExpired2faSecret(uuid);
+        return pending2faSecret.containsKey(uuid);
     }
 
     /** 临时密钥是否已超期（配置为 0 时永不过期） */
@@ -539,11 +592,15 @@ public final class AuthManager {
     }
 
     // 免密登录：跳过密码验证直接完成登录（IP 一致或正版验证通过后调用）
+    // 登录需完成 2FA 的账号不直接放行：进入待验证状态，由 /2fa <验证码> 完成登录
     public void autoLogin(Player player) {
         PlayerData data = dataManager.getPlayer(player.getUniqueId());
-        if (data != null) {
-            completeLogin(player, data);
+        if (data == null) return;
+        if (requires2faAtLogin(player.getUniqueId())) {
+            pending2fa.add(player.getUniqueId());
+            return;
         }
+        completeLogin(player, data);
     }
 
     // ===== Pre-join Dialog 收尾（配置阶段认证后，玩家进入世界时调用） =====
@@ -584,8 +641,10 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
 
-        // 正版账号免密登录，密码哈希为随机占位、玩家未知，跳过旧密码校验，直接设置新密码
-        if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+        // 正版账户默认无密码、离线无密码账户本无旧密码，均跳过旧密码校验，直接设置新密码
+        // （无密码账户借此恢复为有密码账户，是解绑 2FA 的前置步骤）
+        boolean passwordless = data.passwordHash() == null || data.passwordHash().isEmpty();
+        if (!data.premium() && !passwordless && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
             return false;
         }
         String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
@@ -607,7 +666,6 @@ public final class AuthManager {
         spectatorPending.remove(uuid);
         pendingUpgrade.remove(uuid);
         premiumFallback.remove(uuid);
-        pendingPremiumPassword.remove(uuid);
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
             // 记录注销时间，5 秒内拒绝重连，确保 .dat 删除完成
@@ -805,8 +863,6 @@ public final class AuthManager {
         // 清除正版回退标记（会话级状态：本次连接要求密码登录，退出即失效，
         // 防止残留标记使下次验证成功的连接仍误走密码路径）
         premiumFallback.remove(uuid);
-        // 清除待提示的正版明文密码（握手后、join 前断开时 pollPremiumPassword 不会调用，防止残留）
-        pendingPremiumPassword.remove(uuid);
         // 清除超时任务标记（玩家已下线，旧任务无意义）
         loginTimeoutStartedAt.remove(uuid);
         // 注意：不清除失败计数与踢出记录（failedAttempts / kickUntil）。
@@ -977,18 +1033,6 @@ public final class AuthManager {
     /** 清除升级标记（验证成功或失败回退时调用） */
     public void clearUpgradePending(UUID offlineUuid) {
         pendingUpgrade.remove(offlineUuid);
-    }
-
-    /** 暂存首次注册/升级正版账号的明文密码，供玩家 join 时提示（正版验证在握手阶段完成，尚无 Player 对象） */
-    public void stagePremiumPassword(UUID premiumUuid, String plainPassword) {
-        if (plainPassword != null) {
-            pendingPremiumPassword.put(premiumUuid, plainPassword);
-        }
-    }
-
-    /** 获取并移除待提示的明文密码（玩家 join 时调用），无则返回 null */
-    public String pollPremiumPassword(UUID premiumUuid) {
-        return pendingPremiumPassword.remove(premiumUuid);
     }
 
     /** 标记正版玩家本次为正版验证失败回退进入（需密码登录） */

@@ -35,6 +35,12 @@ public final class LoginCommand implements BasicCommand {
             return;
         }
 
+        // 无密码账户不走密码登录，验证码是唯一登录因素
+        if (authManager.isPasswordless(player.getUniqueId())) {
+            player.sendMessage(HTLogin.legacy(I18n.get("login.passwordless_no_password", player)));
+            return;
+        }
+
         if (args.length < 1) {
             player.sendMessage(HTLogin.legacy(I18n.get("login.usage", player)));
             return;

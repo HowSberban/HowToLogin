@@ -63,6 +63,8 @@ public final class ConfigManager {
     private boolean twoFactorEnabled;
     // 绑定时临时密钥的有效期（秒），0 = 永不过期
     private int twoFactorTempSecretExpireSeconds;
+    // 是否提供扫码网页入口（关闭后不向二维码服务发送密钥）
+    private boolean twoFactorQrEnabled;
     // 生成二维码的服务地址模板，{data} 占位符会被替换为 URL 编码后的 otpauth 资料
     private String twoFactorQrUrl;
 
@@ -239,6 +241,7 @@ public final class ConfigManager {
         this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
         this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
                 config.getInt("login.2fa.expire-seconds", 180), 0);
+        this.twoFactorQrEnabled = config.getBoolean("login.2fa.qr", true);
         this.twoFactorQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
 
         // 密码规则
@@ -504,6 +507,7 @@ public final class ConfigManager {
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
     public boolean twoFactorEnabled() { return twoFactorEnabled; }
     public int twoFactorTempSecretExpireSeconds() { return twoFactorTempSecretExpireSeconds; }
+    public boolean twoFactorQrEnabled() { return twoFactorQrEnabled; }
     public String twoFactorQrUrl() { return twoFactorQrUrl; }
 
     // 密码规则

@@ -61,24 +61,22 @@ public final class DataService {
 
     /**
      * 保存正版玩家数据（同时更新内存 + 异步落盘）。
-     * 若已有账号则标记为 premium，否则创建新记录。
-     * @return 首次注册时生成的随机明文密码，非首次（markPremium）返回 null
+     * 若已有账号则标记为 premium，否则创建新记录（无密码，正版默认）。
      */
-    public String savePremium(UUID uuid, String name, String ip, String propertiesJson) {
+    public void savePremium(UUID uuid, String name, String ip, String propertiesJson) {
         if (dataManager.hasAccount(uuid)) {
             dataManager.markPremium(uuid, name, propertiesJson);
-            return null;
+            return;
         }
-        return dataManager.createPremiumPlayer(uuid, name, ip, propertiesJson);
+        dataManager.createPremiumPlayer(uuid, name, ip, propertiesJson);
     }
 
     /**
      * 将离线账号迁移到正版账号（离线升级为正版）。
-     * 透传 PlayerDataManager，保留退出位置等数据并标记 premium=1。
-     * @return 升级时生成的随机明文密码，迁移失败返回 null
+     * 透传 PlayerDataManager，保留退出位置等数据并标记 premium=1，密码置空（正版默认无密码）。
      */
-    public String migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String propertiesJson) {
-        return dataManager.migrateToPremium(offlineUuid, premiumUuid, name, ip, propertiesJson);
+    public void migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String propertiesJson) {
+        dataManager.migrateToPremium(offlineUuid, premiumUuid, name, ip, propertiesJson);
     }
 
     /** 按玩家名查询正版账号（premium=1），用于正版验证失败时回退密码登录的 UUID 定位 */

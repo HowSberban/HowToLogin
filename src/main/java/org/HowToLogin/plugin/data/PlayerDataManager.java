@@ -292,29 +292,17 @@ public final class PlayerDataManager {
     }
 
     /**
-     * 为正版账号生成 16 位随机密码（数字 + 大小写字母），哈希后写入数据库。
-     * 返回明文密码，供首次注册/升级进服时提示玩家。
+     * 创建正版玩家记录（premium=1，无密码，带 properties 皮肤数据）。
+     * 正版验证即身份凭证，无需密码；玩家可用 /changepassword 自行设置
      */
-    private String assignRandomPassword(PlayerData data) {
-        String plain = PasswordHash.generateRandomPassword(16);
-        data.passwordHash(PasswordHash.hashPassword(plain, plugin.getConfigManager().passwordHashAlgorithm(), plugin.getConfigManager().bcryptCost()));
-        return plain;
-    }
-
-    /**
-     * 创建正版玩家记录（premium=1，随机密码占位，带 properties 皮肤数据）。
-     * @return 随机生成的明文密码（用于首次进服提示玩家），null 表示未创建
-     */
-    public String createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
+    public void createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
         PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties, null, null, 0);
-        String plain = assignRandomPassword(data);
         players.put(uuid, data);
         if (name != null) {
             premiumNameIndex.put(name.toLowerCase(), uuid);
         }
         // 创建正版账号同样为关键操作：立即落库，避免崩溃丢新账号
         saveNow(data);
-        return plain;
     }
 
     /** 标记已有账号为正版（premium=1），更新 properties 和 name */
@@ -347,13 +335,12 @@ public final class PlayerDataManager {
 
     /**
      * 将离线账号迁移到正版账号（离线账号升级为正版）。
-     * 用正版 UUID 创建新记录，保留退出位置等数据，清除密码（正版免密），premium=1。
+     * 用正版 UUID 创建新记录，保留退出位置等数据，密码置空（正版默认无密码），premium=1。
      * 异步落库：删除离线账号 + 写入正版账号。
-     * @return 随机生成的明文密码（用于首次进服提示玩家），迁移失败返回 null
      */
-    public String migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String properties) {
+    public void migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String properties) {
         PlayerData offline = players.remove(offlineUuid);
-        if (offline == null) return null;
+        if (offline == null) return;
         if (offline.name() != null) {
             premiumNameIndex.remove(offline.name().toLowerCase());
         }
@@ -364,7 +351,6 @@ public final class PlayerDataManager {
                 ip != null && !ip.isEmpty() ? ip : offline.ip(),
                 System.currentTimeMillis() / 1000, offline.logoutLocation(), true, properties, offline.gameMode(),
                 offline.totpSecret(), offline.lastActive());
-        String plain = assignRandomPassword(premium);
         players.put(premiumUuid, premium);
         premiumNameIndex.put(name.toLowerCase(), premiumUuid);
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
@@ -389,7 +375,6 @@ public final class PlayerDataManager {
                 plugin.getLogger().severe(I18n.get("log.migrate_failed", offlineUuid + ": " + e.getMessage()));
             }
         });
-        return plain;
     }
 
     /** 按玩家名查询（用于正版验证 LoginStart 阶段，仅返回 premium=1 的记录） */
