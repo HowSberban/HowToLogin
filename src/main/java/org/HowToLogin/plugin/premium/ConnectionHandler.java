@@ -91,7 +91,8 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     // ===== 阶段1：LoginStart 拦截与查档 =====
 
-    @SuppressWarnings("resource") // EventLoop 为长生命周期资源，不应关闭；调度任务在会话清理时取消
+    // EventLoop 为长生命周期资源，不应关闭；调度任务在会话清理时取消
+    @SuppressWarnings("resource")
     private void handleLoginStart(PacketReceiveEvent event) {
         Channel channel = (Channel) event.getChannel();
         User user = event.getUser();
@@ -221,6 +222,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
     // ===== 阶段2-3：加密握手与启用 =====
 
+    // EventLoop 为长生命周期资源，不应关闭
     @SuppressWarnings("resource")
     private void handleEncryptionResponse(PacketReceiveEvent event) {
         Channel channel = (Channel) event.getChannel();
@@ -383,7 +385,8 @@ public final class ConnectionHandler extends PacketListenerAbstract {
      * 客户端收到 LoginSuccess 后发送 LoginAcknowledged，服务端自然接手协议切换。
      * 正版验证成功与失败回退共用此方法。
      */
-    @SuppressWarnings("resource") // EventLoop 为长生命周期资源，不应关闭
+    // EventLoop 为长生命周期资源，不应关闭
+    @SuppressWarnings("resource")
     private void proceedWithLogin(Channel channel, User user, SessionContext session,
                                   UUID uuid, String username, String properties) {
         playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> channel.eventLoop().execute(() -> {

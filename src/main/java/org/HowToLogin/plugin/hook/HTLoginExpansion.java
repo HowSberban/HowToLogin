@@ -6,6 +6,8 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.Locale;
+
 /**
  * PlaceholderAPI 变量扩展
  * 变量列表：
@@ -38,7 +40,7 @@ public final class HTLoginExpansion extends PlaceholderExpansion {
     @Override
     public @Nullable String onPlaceholderRequest(Player player, @NotNull String params) {
         if (player == null) return "";
-        return switch (params.toLowerCase()) {
+        return switch (params.toLowerCase(Locale.ROOT)) {
             case "is_logged_in" -> plugin.getAuthManager().isLoggedIn(player) ? "yes" : "no";
             case "is_registered", "has_account" -> plugin.getAuthManager().hasAccount(player) ? "yes" : "no";
             default -> null;

@@ -16,6 +16,7 @@ import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.auth.PasswordValidator;
 import org.howtologin.plugin.config.ConfigManager;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -58,7 +59,8 @@ public final class PreJoinAuthListener implements Listener {
         // 注册流程完成（写在 countDown 前，由闭锁建立 happens-before）
         boolean registered;
         // 免密登录直弹 2FA（正版/IP）：验证状态失效时重弹验证码窗口而非密码窗口
-        boolean passwordless2fa;
+        // volatile：写入发生在 sessions.put 之后，回调线程读取无闭锁保护，需保证可见性
+        volatile boolean passwordless2fa;
 
         Session(PlayerConfigurationConnection connection) {
             this.connection = connection;
@@ -85,13 +87,12 @@ public final class PreJoinAuthListener implements Listener {
     @EventHandler
     public void onConfigure(AsyncPlayerConnectionConfigureEvent event) {
         PlayerConfigurationConnection conn = event.getConnection();
+        UUID uuid = conn.getProfile().getId();
         // 清除上次连接可能残留的认证结果，避免本次连接误消费
-        var profileId = conn.getProfile().getId();
-        if (profileId != null) {
-            outcomes.remove(profileId);
+        if (uuid != null) {
+            outcomes.remove(uuid);
         }
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
-        UUID uuid = conn.getProfile().getId();
         // 已登录（reconfigure 场景）直接放行
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
         // 客户端是否支持配置阶段 Dialog（<1.21.6 收到 Show Dialog 包会断连，回退聊天栏提示）
@@ -171,12 +172,20 @@ public final class PreJoinAuthListener implements Listener {
         }
     }
 
-    /** 客户端语言（读取失败回退默认） */
+    /** 客户端语言（读取失败回退默认）。
+     *  客户端发送的原始值是全小写格式（如 en_us），语言文件名为 en_US 形式（语言小写 + 地区大写），
+     *  需规范化后再匹配，否则非默认语言玩家会看到默认语言 */
     private static String resolveLocale(PlayerConfigurationConnection conn) {
         try {
             // getClientOption 保证非空，仅需判断是否空白
             String locale = conn.getClientOption(ClientOption.LOCALE);
-            return locale.isBlank() ? null : locale;
+            if (locale.isBlank()) return null;
+            int underscore = locale.indexOf('_');
+            if (underscore > 0 && underscore < locale.length() - 1) {
+                return locale.substring(0, underscore).toLowerCase(Locale.ROOT)
+                        + "_" + locale.substring(underscore + 1).toUpperCase(Locale.ROOT);
+            }
+            return locale;
         } catch (Exception e) {
             return null;
         }

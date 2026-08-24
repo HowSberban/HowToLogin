@@ -1,5 +1,6 @@
 package org.howtologin.plugin.premium;
 
+import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -34,7 +35,7 @@ public final class SessionContext {
     // 是否为离线账号升级尝试（升级成功则迁移账号，失败则回退离线并清除标记）
     private volatile boolean isUpgradeAttempt;
     // 升级玩家的离线 UUID（用于迁移账号 / 清除升级标记）
-    private volatile java.util.UUID offlineUuid;
+    private volatile UUID offlineUuid;
     // 是否为数据库已注册正版账号（premium=1）：用于正版验证失败时判断是否可回退密码登录
     private volatile boolean premiumAccount;
 
@@ -67,8 +68,8 @@ public final class SessionContext {
     public boolean isUpgradeAttempt() { return isUpgradeAttempt; }
     public void upgradeAttempt(boolean upgradeAttempt) { this.isUpgradeAttempt = upgradeAttempt; }
 
-    public java.util.UUID offlineUuid() { return offlineUuid; }
-    public void offlineUuid(java.util.UUID offlineUuid) { this.offlineUuid = offlineUuid; }
+    public UUID offlineUuid() { return offlineUuid; }
+    public void offlineUuid(UUID offlineUuid) { this.offlineUuid = offlineUuid; }
 
     public boolean premiumAccount() { return premiumAccount; }
     public void premiumAccount(boolean premiumAccount) { this.premiumAccount = premiumAccount; }

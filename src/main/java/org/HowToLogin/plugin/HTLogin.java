@@ -32,7 +32,7 @@ public final class HTLogin extends JavaPlugin {
     private PlayerDataManager playerDataManager;
     private AuthManager authManager;
     private PlayerListener playerListener;
-    // 飞行末影珍珠保管：退出时记录并移除飞行珍珠，登录成功后返还
+    // 飞行末影珍珠保管：统一接管退出/进入/返还路径，防止未登录玩家被珍珠传送
     private PendingPearlManager pendingPearlManager;
     // Dialog API 构建器：开关关闭或服务端不支持（<1.21.11）时为 null，pre-join 与游戏内 2FA 绑定均回退
     private DialogManager dialogManager;
@@ -145,7 +145,7 @@ public final class HTLogin extends JavaPlugin {
     private void registerListeners() {
         playerListener = new PlayerListener(this, authManager);
         getServer().getPluginManager().registerEvents(playerListener, this);
-        // 末影珍珠保管：独立监听器（跟踪投掷/落地/退出）
+        // 末影珍珠保管：独立监听器（接管飞行珍珠，登录后按配置返还）
         pendingPearlManager = new PendingPearlManager(this);
         getServer().getPluginManager().registerEvents(pendingPearlManager, this);
     }

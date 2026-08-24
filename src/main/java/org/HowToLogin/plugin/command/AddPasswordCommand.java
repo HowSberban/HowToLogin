@@ -54,10 +54,8 @@ public final class AddPasswordCommand implements BasicCommand {
 
         if (PasswordValidator.invalid(plugin, player, password)) return;
 
-        if (authManager.addPassword(player, password)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("addpassword.success", player)));
-        } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("addpassword.failed", player)));
-        }
+        // 异步设置：bcrypt 哈希耗时，避免阻塞玩家区域线程；回调在玩家区域线程执行
+        authManager.addPasswordAsync(player, password, success ->
+                player.sendMessage(HTLogin.legacy(I18n.get(success ? "addpassword.success" : "addpassword.failed", player))));
     }
 }

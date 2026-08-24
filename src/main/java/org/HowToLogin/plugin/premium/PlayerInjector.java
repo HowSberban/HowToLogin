@@ -69,6 +69,7 @@ public final class PlayerInjector {
      * @param ip   玩家 IP
      * @return true 表示允许继续，false 表示被 KICK
      */
+    // AsyncPlayerPreLoginEvent 标记为 Experimental/removal，实际为登录流程必需的公开 API
     @SuppressWarnings({"removal", "UnstableApiUsage"})
     public CompletableFuture<Boolean> fireAsyncPreLogin(String name, UUID uuid, String ip) {
         return CompletableFuture.supplyAsync(() -> {
@@ -111,7 +112,7 @@ public final class PlayerInjector {
         packetListenerField.setAccessible(true);
         Object loginListener = packetListenerField.get(connection);
         if (loginListener == null) {
-            throw new IllegalStateException("Packet listener is null");
+            throw new IllegalStateException(I18n.get("log.premium_packet_listener_null"));
         }
 
         // 3. 构造 GameProfile 并设置到 authenticatedProfile

@@ -20,13 +20,15 @@ public final class Totp {
     private static final String BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
     // 验证时允许的时间窗口偏移（±1 个周期，容忍客户端/服务端时钟偏差）
     private static final int WINDOW = 1;
+    // 密钥生成随机源（线程安全，复用避免重复初始化开销）
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private Totp() {}
 
     /** 生成随机 TOTP 密钥（20 字节，Base32 编码） */
     public static String generateSecret() {
         byte[] bytes = new byte[20];
-        new SecureRandom().nextBytes(bytes);
+        SECURE_RANDOM.nextBytes(bytes);
         return encodeBase32(bytes);
     }
 

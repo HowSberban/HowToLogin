@@ -233,7 +233,7 @@ public final class ConfigManager {
         this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 120), 0);
         this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
         this.loginRemindMethod = config.getString("login.remind-method", "chat").toLowerCase(Locale.ROOT);
-        this.loginDialogEnabled = config.getBoolean("login.dialog.enabled", false);
+        this.loginDialogEnabled = config.getBoolean("login.dialog.enabled", true);
         this.dialogAllowRiskyVersions = config.getBoolean("login.dialog.allow-risky-versions", false);
         // 提示方式校验：仅支持 chat/title/actionbar/bossbar，非法值回退为 chat
         if (!List.of("chat", "title", "actionbar", "bossbar").contains(this.loginRemindMethod)) {
@@ -246,7 +246,7 @@ public final class ConfigManager {
         // 双因素认证
         this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
         this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
-                config.getInt("login.2fa.expire-seconds", 180), 0);
+                config.getInt("login.2fa.expire-seconds", 300), 0);
         this.twoFactorQrEnabled = config.getBoolean("login.2fa.qr", true);
         this.twoFactorQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
 
@@ -279,6 +279,8 @@ public final class ConfigManager {
         if (!"bcrypt".equals(this.passwordHashAlgorithm) && !"sha256".equals(this.passwordHashAlgorithm)) {
             plugin.getLogger().warning(I18n.get("log.config_hash_invalid", this.passwordHashAlgorithm, "bcrypt"));
             this.passwordHashAlgorithm = "bcrypt";
+            config.set("password.hash", "bcrypt");
+            configDirty = true;
         }
         // BCrypt work factor：钳制 4-31 有效范围，越界时回写配置文件
         this.bcryptCost = clampRange("password.hash-cost", config.getInt("password.hash-cost", 12), 4, 31);
@@ -387,15 +389,15 @@ public final class ConfigManager {
         }
         this.premiumSessionServerMirrors = List.copyOf(mirrors);
         this.premiumTimeoutSeconds = clampInt("premium.timeout-seconds", config.getInt("premium.timeout-seconds", 5), 1);
-        // 验证总时限：默认 25 秒，须小于客户端"通讯加密中"等待上限（30 秒），避免服务端验证超时后客户端已主动断开
-        this.premiumVerifyDeadlineMs = clampInt("premium.verify-deadline-ms", config.getInt("premium.verify-deadline-ms", 25000), 1000);
+        // 验证总时限：默认 30 秒，不超过客户端"通讯加密中"等待上限（30 秒），避免服务端验证超时后客户端已主动断开
+        this.premiumVerifyDeadlineMs = clampInt("premium.verify-deadline-ms", config.getInt("premium.verify-deadline-ms", 30000), 1000);
         this.premiumCrackerCacheSeconds = clampInt("premium.cracker-cache-seconds", config.getInt("premium.cracker-cache-seconds", 120), 0);
         this.premiumHandshakeTimeoutMs = clampInt("premium.handshake-timeout-ms", config.getInt("premium.handshake-timeout-ms", 30000), 0);
         this.premiumMaxRetries = clampInt("premium.max-retries", config.getInt("premium.max-retries", 2), 0);
         this.premiumRetryIntervalMs = clampInt("premium.retry-interval-ms", config.getInt("premium.retry-interval-ms", 500), 0);
         this.premiumHttpPoolSize = clampRange("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2, 64);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
-        this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", false);
+        this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", true);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
         this.premiumFallbackCacheSeconds = clampInt("premium.fallback.cache-seconds", config.getInt("premium.fallback.cache-seconds", 300), 30);
 

@@ -15,6 +15,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 public final class AuthManager {
 
@@ -120,8 +122,18 @@ public final class AuthManager {
         return dataManager.findByIp(ip).size() >= max;
     }
 
+    /** 触发同步 API 事件：tick 线程直接触发，异步线程转全局区域调度器。
+     *  管理命令在异步线程执行（getOfflinePlayer 防阻塞），直接 callEvent 会抛 IllegalStateException */
+    private void fireEvent(Event event) {
+        if (Bukkit.isPrimaryThread()) {
+            Bukkit.getPluginManager().callEvent(event);
+        } else {
+            Bukkit.getGlobalRegionScheduler().run(plugin, task -> Bukkit.getPluginManager().callEvent(event));
+        }
+    }
+
     // Registration
-    /** 若账号不存在则创建（哈希+写库）。register/forceRegister/registerConfig 复用；ip 可为 null（记为 "unknown"） */
+    /** 若账号不存在则创建（哈希+写库）。forceRegister/registerConfig 复用；ip 可为 null（记为 "unknown"） */
     private boolean createAccount(UUID uuid, String password, String ip) {
         if (dataManager.hasAccount(uuid)) {
             return false;
@@ -131,19 +143,31 @@ public final class AuthManager {
         return true;
     }
 
-    public boolean register(Player player, String password) {
+    /**
+     * 异步注册：bcrypt 哈希在异步线程执行（避免阻塞玩家区域线程），建号与登录收尾回到玩家区域线程。
+     * @param done 回调（玩家区域线程）：true 注册成功；false 已达 IP 上限或账号已存在（并发竞态）
+     */
+    public void registerAsync(Player player, String password, Consumer<Boolean> done) {
         UUID uuid = player.getUniqueId();
         String ip = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
         if (isIpAccountLimitReached(ip)) {
-            return false;
+            done.accept(false);
+            return;
         }
-        if (!createAccount(uuid, password, ip)) {
-            return false;
-        }
-        markLoggedIn(uuid);
-        onLoginSuccess(player);
-        Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, player));
-        return true;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+            player.getScheduler().run(plugin, task2 -> {
+                if (dataManager.hasAccount(uuid)) {
+                    done.accept(false);
+                    return;
+                }
+                dataManager.createPlayer(uuid, hash, ip != null ? ip : "unknown");
+                markLoggedIn(uuid);
+                onLoginSuccess(player);
+                fireEvent(new HTLoginRegisterEvent(uuid, player));
+                done.accept(true);
+            }, null);
+        });
     }
 
     /**
@@ -156,7 +180,7 @@ public final class AuthManager {
         String ip = online != null && online.getAddress() != null
                 ? online.getAddress().getAddress().getHostAddress() : null;
         if (!createAccount(uuid, password, ip)) return false;
-        Bukkit.getPluginManager().callEvent(new HTLoginRegisterEvent(uuid, online));
+        fireEvent(new HTLoginRegisterEvent(uuid, online));
         return true;
     }
 
@@ -536,7 +560,7 @@ public final class AuthManager {
             data.lastLogin(0);
             dataManager.save(uuid);
         }
-        Bukkit.getPluginManager().callEvent(new HTLoginLogoutEvent(uuid, Bukkit.getPlayer(uuid)));
+        fireEvent(new HTLoginLogoutEvent(uuid, Bukkit.getPlayer(uuid)));
         return true;
     }
 
@@ -559,7 +583,7 @@ public final class AuthManager {
         UUID uuid = player.getUniqueId();
         markLoggedIn(uuid);
         onLoginSuccess(player);
-        Bukkit.getPluginManager().callEvent(new HTLoginLoginEvent(player));
+        fireEvent(new HTLoginLoginEvent(player));
     }
 
     // IP 免密登录：检查上次登录 IP 与当前 IP 是否一致，且未超过失效时间
@@ -631,29 +655,48 @@ public final class AuthManager {
     }
 
     // Change password
-    public boolean changePassword(Player player, String oldPassword, String newPassword) {
+    /**
+     * 异步修改密码：旧密码校验与新密码哈希（bcrypt 耗时）在异步线程执行，结果回调回到玩家区域线程。
+     * 正版账户密码可能为历史随机占位（玩家未知），跳过旧密码校验，直接设置新密码
+     */
+    public void changePasswordAsync(Player player, String oldPassword, String newPassword, Consumer<Boolean> done) {
         UUID uuid = player.getUniqueId();
         PlayerData data = dataManager.getPlayer(uuid);
-        if (data == null) return false;
-
-        // 正版账户密码可能为历史随机占位（玩家未知），跳过旧密码校验，直接设置新密码
-        if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
-            return false;
+        if (data == null) {
+            done.accept(false);
+            return;
         }
-        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
-        dataManager.updatePassword(uuid, newHash);
-        return true;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+                player.getScheduler().run(plugin, task2 -> done.accept(false), null);
+                return;
+            }
+            String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+            player.getScheduler().run(plugin, task2 -> {
+                dataManager.updatePassword(uuid, newHash);
+                done.accept(true);
+            }, null);
+        });
     }
 
-    /** 为无密码账户添加密码（转为有密码账户，是解绑 2FA 的前置步骤）。已有密码时返回 false */
-    public boolean addPassword(Player player, String newPassword) {
+    /**
+     * 异步为无密码账户添加密码（转为有密码账户，是解绑 2FA 的前置步骤）：bcrypt 哈希在异步线程执行，结果回调回到玩家区域线程。
+     * 已有密码或账号不存在时回调 false
+     */
+    public void addPasswordAsync(Player player, String newPassword, Consumer<Boolean> done) {
         UUID uuid = player.getUniqueId();
         PlayerData data = dataManager.getPlayer(uuid);
-        if (data == null) return false;
-        if (data.passwordHash() != null && !data.passwordHash().isEmpty()) return false;
-        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
-        dataManager.updatePassword(uuid, newHash);
-        return true;
+        if (data == null || (data.passwordHash() != null && !data.passwordHash().isEmpty())) {
+            done.accept(false);
+            return;
+        }
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+            player.getScheduler().run(plugin, task2 -> {
+                dataManager.updatePassword(uuid, newHash);
+                done.accept(true);
+            }, null);
+        });
     }
 
     // Unregister
@@ -684,7 +727,7 @@ public final class AuthManager {
             // 顺手清理已过期的踢出记录、失败计数和注销拒绝重连记录，防止批量注销时累积
             cleanupExpiredStates();
         }
-        Bukkit.getPluginManager().callEvent(new HTLoginUnregisterEvent(uuid, Bukkit.getPlayer(uuid)));
+        fireEvent(new HTLoginUnregisterEvent(uuid, Bukkit.getPlayer(uuid)));
         return true;
     }
 

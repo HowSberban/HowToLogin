@@ -48,19 +48,22 @@ public final class RegisterCommand implements BasicCommand {
 
         if (PasswordValidator.invalid(plugin, player, password)) return;
 
-        // 同 IP 注册数量上限：连接层已拦已满的 IP，此处精确提示（异步兜底已写在 register 内）
+        // 同 IP 注册数量上限：此处拦截并精确提示；registerAsync 内仍有兜底判定（并发场景）
         var playerIp = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
         if (authManager.isIpAccountLimitReached(playerIp)) {
             player.sendMessage(HTLogin.legacy(I18n.get("register.ip_limit", player, plugin.getConfigManager().maxAccountsPerIp())));
             return;
         }
 
-        if (authManager.register(player, password)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.success", player)));
-            // 注册成功后传送到默认世界 spawn（启用坐标保护时生效）
-            authManager.returnToLogoutLocation(player);
-        } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.failed", player)));
-        }
+        // 异步注册：bcrypt 哈希耗时，避免阻塞玩家区域线程；回调在玩家区域线程执行
+        authManager.registerAsync(player, password, success -> {
+            if (success) {
+                player.sendMessage(HTLogin.legacy(I18n.get("register.success", player)));
+                // 注册成功后传送到默认世界 spawn（启用坐标保护时生效）
+                authManager.returnToLogoutLocation(player);
+            } else {
+                player.sendMessage(HTLogin.legacy(I18n.get("register.failed", player)));
+            }
+        });
     }
 }

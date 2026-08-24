@@ -19,6 +19,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -32,7 +33,7 @@ public final class PlayerDataManager {
     // 内存缓存：启动时全量加载，运行时读操作走缓存，写操作标记脏后由周期任务批量落库
     private final Map<UUID, PlayerData> players = new ConcurrentHashMap<>();
     // 脏标记：内存数据已修改但尚未落库的玩家 UUID，由周期任务批量 flush
-    private final java.util.Set<UUID> dirty = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> dirty = ConcurrentHashMap.newKeySet();
     // 批量落库失败重试计数：达到上限后放弃该玩家，防止数据库故障时无限重试刷日志
     private final Map<UUID, Integer> flushFailures = new ConcurrentHashMap<>();
     // 批量落库最大重试次数
@@ -253,7 +254,7 @@ public final class PlayerDataManager {
     }
 
     /** 获取所有已注册玩家的 UUID 集合 */
-    public java.util.Set<UUID> getAllUuids() {
+    public Set<UUID> getAllUuids() {
         return players.keySet();
     }
 
@@ -266,8 +267,8 @@ public final class PlayerDataManager {
     }
 
     /** 查找指定 IP 下的所有账号（用于管理员排查多账号） */
-    public java.util.List<PlayerData> findByIp(String ip) {
-        if (ip == null || ip.isEmpty()) return java.util.List.of();
+    public List<PlayerData> findByIp(String ip) {
+        if (ip == null || ip.isEmpty()) return List.of();
         return players.values().stream()
                 .filter(d -> ip.equals(d.ip()))
                 .toList();

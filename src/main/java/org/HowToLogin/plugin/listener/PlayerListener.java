@@ -180,7 +180,8 @@ public final class PlayerListener implements Listener {
         ScheduledTask old = reminderTasks.remove(uuid);
         if (old != null) old.cancel();
         // Paper 1.20+ 统一调度器 API，兼容 Folia
-        reminderTasks.put(uuid, player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
+        // 玩家调度器已退休（退出瞬间与 reload 挂起竞态）时返回 null，null 不允许入 Map
+        ScheduledTask task = player.getScheduler().runAtFixedRate(plugin, scheduledTask -> {
             if (!player.isOnline()) {
                 reminderTasks.remove(uuid);
                 hideReminderBar(player);
@@ -195,7 +196,10 @@ public final class PlayerListener implements Listener {
                 return;
             }
             sendReminder(player, needsLogin);
-        }, null, periodTicks, periodTicks));
+        }, null, periodTicks, periodTicks);
+        if (task != null) {
+            reminderTasks.put(uuid, task);
+        }
     }
 
     /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
@@ -374,10 +378,12 @@ public final class PlayerListener implements Listener {
                 event.setTo(from);
             }
         } else {
-            // 仅禁止位置移动：保留 to 的视角（yaw/pitch）
+            // 仅禁止位置移动：直接改 to 的坐标（复用对象，避免热路径逐次分配），保留其视角（yaw/pitch）
             if (positionChanged) {
-                event.setTo(new Location(from.getWorld(), from.getX(), from.getY(), from.getZ(),
-                        to.getYaw(), to.getPitch()));
+                to.setX(from.getX());
+                to.setY(from.getY());
+                to.setZ(from.getZ());
+                event.setTo(to);
             }
         }
     }
@@ -495,8 +501,6 @@ public final class PlayerListener implements Listener {
             event.setCancelled(true);
         }
     }
-
-    // ===== 以下为新增事件监听 =====
 
     // 容器点击（含创造模式）
     @EventHandler(priority = EventPriority.LOWEST)
