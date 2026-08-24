@@ -77,6 +77,8 @@ public final class ConfigManager {
 
     // 注册限制
     private int maxAccountsPerIp;
+    // 同 IP 已满时，是否在连接阶段直接拒绝未注册新玩家进服（false=放行由注册动作判定）
+    private boolean ipLimitRejectJoin;
 
     // 行为限制
     private boolean preventMove;
@@ -291,6 +293,8 @@ public final class ConfigManager {
 
         // 注册限制
         this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip", config.getInt("register.max-accounts-per-ip", 3), 0);
+        // 连接阶段拦截未注册玩家（IP 已满时）的开关，默认开启保持严格；共享 IP 环境可关闭
+        this.ipLimitRejectJoin = config.getBoolean("register.ip-limit-reject-join", true);
 
         // 行为限制
         this.preventMove = config.getBoolean("prevent.move", true);
@@ -520,6 +524,8 @@ public final class ConfigManager {
 
     // 注册限制
     public int maxAccountsPerIp() { return maxAccountsPerIp; }
+    // 同 IP 已满时是否在连接阶段拒绝未注册新玩家进服
+    public boolean ipLimitRejectJoin() { return ipLimitRejectJoin; }
 
     // 行为限制
     public boolean preventMove() { return preventMove; }

@@ -80,6 +80,9 @@ register:
   timeout: 120
   # 同一 IP 最大账号数量，0 = 不限制
   max-accounts-per-ip: 3
+  # 同 IP 已达上限时，是否在连接阶段直接拒绝未注册新玩家进服
+  # true = 严格（进服即被拒）；false = 放行进服，由注册动作精确认定（适合共享 IP 环境）
+  ip-limit-reject-join: true
 
 # 密码规则
 password:

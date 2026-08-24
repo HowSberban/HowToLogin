@@ -285,7 +285,7 @@ public final class PreJoinAuthListener implements Listener {
                 session.registered = true;
                 session.success = true;
                 session.latch.countDown();
-            } else if (!authManager.checkIpRegisterLimit(ip)) {
+            } else if (authManager.isIpAccountLimitReached(ip)) {
                 // 同 IP 注册数量已达上限：精确提示（连接层已拦已满 IP，此处兜底并发/延迟场景）
                 showRegister(session, uuid, locale, HTLogin.legacy(
                         I18n.getForLocale("register.ip_limit", locale, plugin.getConfigManager().maxAccountsPerIp())));

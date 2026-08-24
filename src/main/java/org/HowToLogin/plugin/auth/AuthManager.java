@@ -108,16 +108,16 @@ public final class AuthManager {
     }
 
     /**
-     * 检查同 IP 注册数量上限：仅按已注册账号数判定，未注册玩家不占用名额。
+     * 同 IP 已注册账号数是否已达上限：仅按已注册账号数判定，未注册玩家不占用名额。
      * 连接阶段（拦截已满的 IP）与注册阶段（精确兜底）共用。
-     * @param ip 玩家 IP（null 视为放行）
-     * @return true 允许进入/注册，false 该 IP 已满
+     * @param ip 玩家 IP（null 视为未达上限）
+     * @return true 已达上限，false 仍可注册/进入
      */
-    public boolean checkIpRegisterLimit(String ip) {
+    public boolean isIpAccountLimitReached(String ip) {
         int max = configManager.maxAccountsPerIp();
-        if (max <= 0) return true;
-        if (ip == null) return true;
-        return dataManager.findByIp(ip).size() < max;
+        if (max <= 0) return false;
+        if (ip == null) return false;
+        return dataManager.findByIp(ip).size() >= max;
     }
 
     // Registration
@@ -134,7 +134,7 @@ public final class AuthManager {
     public boolean register(Player player, String password) {
         UUID uuid = player.getUniqueId();
         String ip = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
-        if (!checkIpRegisterLimit(ip)) {
+        if (isIpAccountLimitReached(ip)) {
             return false;
         }
         if (!createAccount(uuid, password, ip)) {
@@ -162,7 +162,7 @@ public final class AuthManager {
 
     /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理。IP 已满时拒绝 */
     public boolean registerConfig(UUID uuid, String password, String ip) {
-        if (!checkIpRegisterLimit(ip)) {
+        if (isIpAccountLimitReached(ip)) {
             return false;
         }
         return createAccount(uuid, password, ip);

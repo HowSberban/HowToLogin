@@ -50,7 +50,7 @@ public final class RegisterCommand implements BasicCommand {
 
         // 同 IP 注册数量上限：连接层已拦已满的 IP，此处精确提示（异步兜底已写在 register 内）
         var playerIp = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
-        if (!authManager.checkIpRegisterLimit(playerIp)) {
+        if (authManager.isIpAccountLimitReached(playerIp)) {
             player.sendMessage(HTLogin.legacy(I18n.get("register.ip_limit", player, plugin.getConfigManager().maxAccountsPerIp())));
             return;
         }
