@@ -147,7 +147,7 @@ public final class TwoFactorCommand {
                 return;
             }
             // 密钥已过期（等待期间超时）：重弹只会展示作废密钥，关闭并提示重新 setup
-            if (!authManager.hasPending2faSecret(player.getUniqueId())) {
+            if (authManager.isPending2faSecretExpired(player.getUniqueId())) {
                 audience.closeDialog();
                 player.sendMessage(msg(player, "2fa.setup_expired"));
                 return;
@@ -211,7 +211,7 @@ public final class TwoFactorCommand {
         } else if (authManager.has2fa(player.getUniqueId())) {
             // 已绑定成功（临时密钥已清除），重复确认不提示验证码错误
             player.sendMessage(msg(player, "2fa.already_enabled"));
-        } else if (!authManager.hasPending2faSecret(player.getUniqueId())) {
+        } else if (authManager.isPending2faSecretExpired(player.getUniqueId())) {
             // 临时密钥已不在（过期被清理）：提示重新 setup 而非验证码错误
             player.sendMessage(msg(player, "2fa.setup_expired"));
         } else {

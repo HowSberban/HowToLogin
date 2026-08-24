@@ -424,10 +424,11 @@ public final class AuthManager {
         return true;
     }
 
-    /** 玩家的临时密钥是否已生成且未过期（供重弹绑定窗口前判断是否还有效） */
-    public boolean hasPending2faSecret(UUID uuid) {
+    /** 玩家的临时密钥是否已失效：未生成或已过期（供提示"重新 setup"前判断）
+     *  调用方均为取反前的直接判断，方法语义保持"已失效"便于阅读 */
+    public boolean isPending2faSecretExpired(UUID uuid) {
         removeExpired2faSecret(uuid);
-        return pending2faSecret.containsKey(uuid);
+        return !pending2faSecret.containsKey(uuid);
     }
 
     /** 临时密钥是否已超期（配置为 0 时永不过期） */

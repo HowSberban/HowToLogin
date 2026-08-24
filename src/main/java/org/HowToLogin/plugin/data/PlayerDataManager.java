@@ -4,7 +4,6 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
-import org.howtologin.plugin.auth.PasswordHash;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
