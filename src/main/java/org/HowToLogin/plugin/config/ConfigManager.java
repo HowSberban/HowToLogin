@@ -292,9 +292,9 @@ public final class ConfigManager {
         }
 
         // 注册限制
-        this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip", config.getInt("register.max-accounts-per-ip", 3), 0);
+        this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip.limit", config.getInt("register.max-accounts-per-ip.limit", 3), 0);
         // 连接阶段拦截未注册玩家（IP 已满时）的开关，默认开启保持严格；共享 IP 环境可关闭
-        this.ipLimitRejectJoin = config.getBoolean("register.ip-limit-reject-join", true);
+        this.ipLimitRejectJoin = config.getBoolean("register.max-accounts-per-ip.reject-join", true);
 
         // 行为限制
         this.preventMove = config.getBoolean("prevent.move", true);

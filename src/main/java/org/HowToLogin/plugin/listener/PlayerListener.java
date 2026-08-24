@@ -65,8 +65,8 @@ public final class PlayerListener implements Listener {
             return;
         }
 
-        // 同一 IP 账号数量限制：已达上限时仅在连接层拦截无账号新玩家，避免名额已满的 IP 涌入未注册玩家；
-        // ip-limit-reject-join 关闭时放行进服，由注册动作精确判定（共享 IP 环境友好）
+        // 同 IP 已达上限时仅在连接层拦截无账号新玩家，避免名额已满的 IP 涌入未注册玩家；
+        // max-accounts-per-ip.reject-join 关闭时放行进服，由注册动作精确判定（共享 IP 环境友好）
         // 已达上限判定内部已处理 max<=0，无需在此重复判断
         if (plugin.getConfigManager().ipLimitRejectJoin()
                 && !authManager.hasAccount(uuid)
