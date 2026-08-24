@@ -102,6 +102,10 @@ public final class ConfigManager {
     private boolean protectionGamemodeEnabled;
     // 背包保护：未登录期间通过 PacketEvents 拦截物品数据包，防止 mod 窥视
     private boolean protectionInventoryEnabled;
+    // 末影珍珠返还方式：item = 物品入包；entity = 世界原位重生飞行珍珠
+    private String pearlReturnMode;
+    // 末影珍珠保管开关（关闭后退出不接管珍珠，维持原版行为）
+    private boolean pearlEnabled;
 
     // 通用设置
     private boolean realUnreg;
@@ -334,6 +338,17 @@ public final class ConfigManager {
         // 背包保护（PacketEvents 数据包拦截）
         this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", false);
 
+        // 末影珍珠保管与返还方式
+        this.pearlEnabled = config.getBoolean("protection.pearl.enabled", true);
+        this.pearlReturnMode = config.getString("protection.pearl.return", "item");
+        // 返还方式校验：仅支持 item/entity，非法值回退为 item
+        if (!"item".equals(this.pearlReturnMode) && !"entity".equals(this.pearlReturnMode)) {
+            plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "protection.pearl.return", this.pearlReturnMode, "item"));
+            this.pearlReturnMode = "item";
+            config.set("protection.pearl.return", "item");
+            configDirty = true;
+        }
+
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
         this.purgeEnabled = config.getBoolean("settings.purge.enabled", false);
         this.purgeDays = clampInt("settings.purge.days", config.getInt("settings.purge.days", 90), 1);
@@ -551,6 +566,12 @@ public final class ConfigManager {
 
     // 背包保护（PacketEvents 数据包拦截）
     public boolean protectionInventoryEnabled() { return protectionInventoryEnabled; }
+
+    // 末影珍珠保管开关
+    public boolean pearlEnabled() { return pearlEnabled; }
+
+    // 末影珍珠返还方式（true = entity 世界原位重生）
+    public boolean pearlReturnEntity() { return "entity".equals(pearlReturnMode); }
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }

@@ -126,6 +126,8 @@ public final class HTLoginCommand {
         plugin.getAuthManager().cleanupExpiredStates();
         // 登录界面方式可能被切换：清理现有 BossBar，重新挂起未登录玩家（关闭旧 Dialog，按新配置展示）
         plugin.getPlayerListener().refreshPendingPlayers();
+        // 珍珠保管开关可能被切换：关闭时清空全部保管记录
+        plugin.getPendingPearlManager().refresh();
         if (dbChanged) {
             sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.reload_db_changed", sender)));
             plugin.getLogger().warning(I18n.get("htlogin.reload_db_changed"));
