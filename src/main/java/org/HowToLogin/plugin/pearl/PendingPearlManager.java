@@ -160,12 +160,10 @@ public final class PendingPearlManager implements Listener {
             }
             Location loc = new Location(world, snapshot.x(), snapshot.y(), snapshot.z());
             // 区域调度器：重生位置可能不在玩家所在区域，须在珍珠位置所属区域线程执行
-            Bukkit.getRegionScheduler().run(plugin, loc, task -> {
-                world.spawn(loc, EnderPearl.class, p -> {
-                    p.setVelocity(new Vector(snapshot.vx(), snapshot.vy(), snapshot.vz()));
-                    p.setShooter(player);
-                });
-            });
+            Bukkit.getRegionScheduler().run(plugin, loc, task -> world.spawn(loc, EnderPearl.class, p -> {
+                p.setVelocity(new Vector(snapshot.vx(), snapshot.vy(), snapshot.vz()));
+                p.setShooter(player);
+            }));
         }
         if (fallbackItems > 0) giveItems(player, fallbackItems);
     }
@@ -174,6 +172,8 @@ public final class PendingPearlManager implements Listener {
      * 接管玩家当前飞行珍珠：快照后移除实体
      * @return 快照列表；玩家当前无飞行珍珠时返回 null（调用方据 null 与否决定是否覆盖 pending）
      */
+    // getEnderPearls() 标记为 @ApiStatus.Experimental，实际为 Paper 稳定提供的实体视图 API
+    @SuppressWarnings("UnstableApiUsage")
     private List<PearlSnapshot> takeOver(Player player) {
         List<EnderPearl> pearls;
         try {
