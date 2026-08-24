@@ -641,12 +641,21 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
 
-        // 正版账户默认无密码、离线无密码账户本无旧密码，均跳过旧密码校验，直接设置新密码
-        // （无密码账户借此恢复为有密码账户，是解绑 2FA 的前置步骤）
-        boolean passwordless = data.passwordHash() == null || data.passwordHash().isEmpty();
-        if (!data.premium() && !passwordless && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+        // 正版账户密码可能为历史随机占位（玩家未知），跳过旧密码校验，直接设置新密码
+        if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
             return false;
         }
+        String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+        dataManager.updatePassword(uuid, newHash);
+        return true;
+    }
+
+    /** 为无密码账户添加密码（转为有密码账户，是解绑 2FA 的前置步骤）。已有密码时返回 false */
+    public boolean addPassword(Player player, String newPassword) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) return false;
+        if (data.passwordHash() != null && !data.passwordHash().isEmpty()) return false;
         String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         dataManager.updatePassword(uuid, newHash);
         return true;

@@ -33,6 +33,12 @@ public final class ChangePasswordCommand implements BasicCommand {
             return;
         }
 
+        // 无密码账户没有旧密码，设置密码走 /addpassword
+        if (authManager.isPasswordless(player.getUniqueId())) {
+            player.sendMessage(HTLogin.legacy(I18n.get("changepw.use_addpassword", player)));
+            return;
+        }
+
         if (args.length < 2) {
             player.sendMessage(HTLogin.legacy(I18n.get("changepw.usage", player)));
             return;

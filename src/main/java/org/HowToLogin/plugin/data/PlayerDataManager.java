@@ -293,7 +293,7 @@ public final class PlayerDataManager {
 
     /**
      * 创建正版玩家记录（premium=1，无密码，带 properties 皮肤数据）。
-     * 正版验证即身份凭证，无需密码；玩家可用 /changepassword 自行设置
+     * 正版验证即身份凭证，无需密码；玩家可用 /addpassword 自行设置
      */
     public void createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
         PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties, null, null, 0);

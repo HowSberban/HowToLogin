@@ -127,6 +127,7 @@ public final class HTLogin extends JavaPlugin {
             commands.register("register", "注册账号", List.of("reg"), new RegisterCommand(this, authManager));
             commands.register("login", "登录账号", List.of("l"), new LoginCommand(authManager));
             commands.register("changepassword", "修改密码", List.of("changepw", "cp"), new ChangePasswordCommand(this, authManager));
+            commands.register("addpassword", "为无密码账户设置密码", List.of("addpw"), new AddPasswordCommand(this, authManager));
             commands.register("removepassword", "移除密码（无密码账户）", List.of("removepw", "rmpw"), new RemovePasswordCommand(authManager));
             commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
             commands.register("upgrade", "将离线账号升级为正版账号", List.of(), new UpgradeAccountCommand(this, authManager));

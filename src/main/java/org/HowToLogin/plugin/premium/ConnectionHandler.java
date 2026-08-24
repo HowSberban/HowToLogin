@@ -309,7 +309,7 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                         authManager.migratePlayerData(session.offlineUuid(), uuid);
                         authManager.clearUpgradePending(session.offlineUuid());
                     } else {
-                        // 首次注册：无密码账户（正版验证即身份凭证，玩家可用 /changepassword 自行设置密码）
+                        // 首次注册：无密码账户（正版验证即身份凭证，玩家可用 /addpassword 自行设置密码）
                         dataService.savePremium(uuid, username, session.ip(), properties);
                     }
 
