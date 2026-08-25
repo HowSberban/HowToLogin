@@ -53,7 +53,7 @@ public final class PlayerListener implements Listener {
         if (authManager.isKicked(uuid)) {
             long remaining = authManager.getKickRemaining(uuid);
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED,
-                    HTLogin.legacy(I18n.get("login.kicked", remaining)));
+                    I18n.msg("login.kicked", remaining));
             return;
         }
 
@@ -61,7 +61,7 @@ public final class PlayerListener implements Listener {
         if (authManager.isRecentlyUnregistered(uuid)) {
             long remaining = authManager.getRecentUnregisterRemaining(uuid);
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
-                    HTLogin.legacy(I18n.get("unregister.recently_deleted", remaining)));
+                    I18n.msg("unregister.recently_deleted", remaining));
             return;
         }
 
@@ -72,8 +72,8 @@ public final class PlayerListener implements Listener {
                 && !authManager.hasAccount(uuid)
                 && authManager.isIpAccountLimitReached(event.getAddress().getHostAddress())) {
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
-                    HTLogin.legacy(I18n.get("register.ip_limit",
-                            plugin.getConfigManager().maxAccountsPerIp())));
+                    I18n.msg("register.ip_limit",
+                            plugin.getConfigManager().maxAccountsPerIp()));
         }
     }
 
@@ -91,7 +91,7 @@ public final class PlayerListener implements Listener {
             if (outcome != null) {
                 boolean login = outcome == PreJoinAuthListener.AuthOutcome.LOGIN;
                 if (login ? authManager.finishPreJoinLogin(player) : authManager.finishPreJoinRegister(player)) {
-                    player.sendMessage(HTLogin.legacy(I18n.get(login ? "login.success" : "register.success", player)));
+                    player.sendMessage(I18n.msg(login ? "login.success" : "register.success", player));
                     return;
                 }
                 // 账号在配置阶段认证后被删除（竞态）：走正常挂起流程
@@ -113,10 +113,10 @@ public final class PlayerListener implements Listener {
             // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，登录收尾与传送延迟到 /2fa 验证完成
             boolean pending2fa = authManager.isPending2fa(player.getUniqueId());
             if (pending2fa) {
-                player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                player.sendMessage(I18n.msg("login.need_2fa", player));
                 scheduleLoginTimeout(player, true);
             } else {
-                player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
+                player.sendMessage(I18n.msg("login.premium_auto_login", player));
             }
             if (!sessionHit && !pending2fa) {
                 authManager.returnToLogoutLocation(player);
@@ -130,11 +130,11 @@ public final class PlayerListener implements Listener {
                 authManager.autoLogin(player);
                 if (authManager.isPending2fa(player.getUniqueId())) {
                     // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，传送由 /2fa 验证完成流程处理
-                    player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                    player.sendMessage(I18n.msg("login.need_2fa", player));
                     scheduleLoginTimeout(player, true);
                 } else {
                     // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
-                    player.sendMessage(HTLogin.legacy(I18n.get("login.ip_auto_login", player)));
+                    player.sendMessage(I18n.msg("login.ip_auto_login", player));
                 }
                 return;
             }
@@ -155,22 +155,21 @@ public final class PlayerListener implements Listener {
             authManager.addPendingLogin(player);
         }
         if (passwordless) {
-            String ip = player.getAddress() != null
-                    ? player.getAddress().getAddress().getHostAddress() : null;
+            String ip = AuthManager.clientIp(player);
             if (!authManager.requires2faAtLogin(player.getUniqueId(), ip)) {
                 // 2FA 会话命中：免验证码直接登录（Dialog 未覆盖时的回退路径）
                 // 走到这里说明 login.session 未命中，出生点在保护位置，登录后须传送回退出位置
                 authManager.autoLogin(player);
-                player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
+                player.sendMessage(I18n.msg("login.success", player));
                 authManager.returnToLogoutLocation(player);
                 return;
             }
             authManager.addPending2fa(player.getUniqueId());
         }
         authManager.setSpectator(player);
-        player.sendMessage(HTLogin.legacy(I18n.get(
+        player.sendMessage(I18n.msg(
                 passwordless ? "login.passwordless_prompt"
-                        : hasAccount ? "listener.please_login" : "listener.please_register", player)));
+                        : hasAccount ? "listener.please_login" : "listener.please_register", player));
         scheduleReminder(player, hasAccount);
         scheduleLoginTimeout(player, hasAccount);
     }
@@ -221,17 +220,17 @@ public final class PlayerListener implements Listener {
         String method = plugin.getConfigManager().loginRemindMethod();
         switch (method) {
             case "title" -> player.showTitle(net.kyori.adventure.title.Title.title(
-                    HTLogin.legacy(I18n.get(key, player)),
+                    I18n.msg(key, player),
                     net.kyori.adventure.text.Component.empty(),
                     net.kyori.adventure.title.Title.Times.times(
                             java.time.Duration.ofMillis(500),
                             java.time.Duration.ofMillis(2000),
                             java.time.Duration.ofMillis(500))));
-            case "actionbar" -> player.sendActionBar(HTLogin.legacy(I18n.get(key, player)));
+            case "actionbar" -> player.sendActionBar(I18n.msg(key, player));
             case "bossbar" -> {
                 net.kyori.adventure.bossbar.BossBar bar = reminderBars.get(player.getUniqueId());
                 if (bar == null) {
-                    net.kyori.adventure.text.Component text = HTLogin.legacy(I18n.get(key, player));
+                    net.kyori.adventure.text.Component text = I18n.msg(key, player);
                     bar = net.kyori.adventure.bossbar.BossBar.bossBar(
                             text, 1.0f,
                             net.kyori.adventure.bossbar.BossBar.Color.YELLOW,
@@ -239,10 +238,10 @@ public final class PlayerListener implements Listener {
                     player.showBossBar(bar);
                     reminderBars.put(player.getUniqueId(), bar);
                 } else {
-                    bar.name(HTLogin.legacy(I18n.get(key, player)));
+                    bar.name(I18n.msg(key, player));
                 }
             }
-            default -> player.sendMessage(HTLogin.legacy(I18n.get(key, player)));
+            default -> player.sendMessage(I18n.msg(key, player));
         }
     }
 
@@ -340,7 +339,7 @@ public final class PlayerListener implements Listener {
             if (!authManager.isLatestLoginTimeout(player.getUniqueId(), startedAt)) return;
             if (!authManager.isLoggedIn(player) && player.isOnline()) {
                 if (plugin.getConfigManager().kickOnTimeout()) {
-                    player.kick(HTLogin.legacy(I18n.get("listener.login_timeout", player)));
+                    player.kick(I18n.msg("listener.login_timeout", player));
                 }
             }
         }, null, delayTicks);
@@ -406,7 +405,7 @@ public final class PlayerListener implements Listener {
         Player player = event.getPlayer();
         if (!authManager.isLoggedIn(player)) {
             event.setCancelled(true);
-            player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login", player)));
+            player.sendMessage(I18n.msg("listener.must_login", player));
         }
     }
 
@@ -429,7 +428,7 @@ public final class PlayerListener implements Listener {
         }
 
         event.setCancelled(true);
-        player.sendMessage(HTLogin.legacy(I18n.get("listener.must_login", player)));
+        player.sendMessage(I18n.msg("listener.must_login", player));
     }
 
     @EventHandler(priority = EventPriority.LOWEST)

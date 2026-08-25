@@ -220,7 +220,7 @@ public final class PendingPearlManager implements Listener {
         for (ItemStack item : leftover.values()) {
             player.getWorld().dropItemNaturally(player.getLocation(), item);
         }
-        player.sendMessage(HTLogin.legacy(I18n.get("pearl.returned", player, count)));
+        player.sendMessage(I18n.msg("pearl.returned", player, count));
     }
 
     /** 从 dat 读入待返还记录（uuid → 珍珠快照列表） */

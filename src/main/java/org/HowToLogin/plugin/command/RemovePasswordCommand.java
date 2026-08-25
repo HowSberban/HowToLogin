@@ -2,7 +2,6 @@ package org.howtologin.plugin.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
@@ -26,38 +25,38 @@ public final class RemovePasswordCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("removepassword.must_login", player)));
+            player.sendMessage(I18n.msg("removepassword.must_login", player));
             return;
         }
 
         if (authManager.isPasswordless(player.getUniqueId())) {
-            player.sendMessage(HTLogin.legacy(I18n.get("removepassword.already", player)));
+            player.sendMessage(I18n.msg("removepassword.already", player));
             return;
         }
 
         // 离线账户必须已绑定 2FA，否则移除密码后账号无任何验证因素
         boolean bound2fa = authManager.hasTotpSecret(player.getUniqueId());
         if (!bound2fa && !authManager.isPremium(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("removepassword.need_2fa", player)));
+            player.sendMessage(I18n.msg("removepassword.need_2fa", player));
             return;
         }
 
         String code = args.length > 0 ? args[0] : null;
         // 已绑定 2FA 时需输入验证码确认（移除后即为唯一登录因素）
         if (bound2fa && (code == null || code.isEmpty())) {
-            player.sendMessage(HTLogin.legacy(I18n.get("removepassword.usage", player)));
+            player.sendMessage(I18n.msg("removepassword.usage", player));
             return;
         }
 
         if (authManager.removePassword(player, code)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("removepassword.success", player)));
+            player.sendMessage(I18n.msg("removepassword.success", player));
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("2fa.confirm_incorrect", player)));
+            player.sendMessage(I18n.msg("2fa.confirm_incorrect", player));
         }
     }
 }

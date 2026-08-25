@@ -2,7 +2,6 @@ package org.howtologin.plugin.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
@@ -21,18 +20,18 @@ public final class LogoutCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("logout.not_logged_in", player)));
+            player.sendMessage(I18n.msg("logout.not_logged_in", player));
             return;
         }
 
         // 登出流程：先保存当前位置（下次登录回到这里）→ 进入待登录状态 → 踢出服务器
         authManager.saveLogoutLocation(player);
         authManager.logout(player);
-        player.kick(HTLogin.legacy(I18n.get("logout.success", player)));
+        player.kick(I18n.msg("logout.success", player));
     }
 }

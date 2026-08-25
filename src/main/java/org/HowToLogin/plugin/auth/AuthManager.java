@@ -54,6 +54,9 @@ public final class AuthManager {
     // 2FA 会话保持：验证码通过后记录 (ip, 到期时间)，同 IP 短时间内重连免验证码
     // 固定窗口不滑动（命中不续期）；仅内存，重启即失效
     private final Map<UUID, TwoFaSession> twoFaSessions = new ConcurrentHashMap<>();
+    // 登录会话保持：密码/2FA 验证通过后记录 (ip, 建立时间戳)，同 IP 且未过期免输密码
+    // 固定窗口不滑动（命中登录不刷新建立时间），避免活跃账号会话永不过期
+    private final Map<UUID, LoginSession> loginSessions = new ConcurrentHashMap<>();
     // 双因素设置中的临时密钥：confirm 验证通过后才持久化
     private final Map<UUID, String> pending2faSecret = new ConcurrentHashMap<>();
     // 临时密钥的创建时间戳：用于按配置时长过期清理（与 pending2faSecret 一一对应）
@@ -135,6 +138,11 @@ public final class AuthManager {
         }
     }
 
+    /** 提取玩家客户端 IP（getAddress 可能为 null，如代理协议未解析完成时） */
+    public static String clientIp(Player player) {
+        return player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
+    }
+
     // Registration
     /** 若账号不存在则创建（哈希+写库）。forceRegister/registerConfig 复用；ip 可为 null（记为 "unknown"） */
     private boolean createAccount(UUID uuid, String password, String ip) {
@@ -152,7 +160,7 @@ public final class AuthManager {
      */
     public void registerAsync(Player player, String password, Consumer<Boolean> done) {
         UUID uuid = player.getUniqueId();
-        String ip = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
+        String ip = clientIp(player);
         if (isIpAccountLimitReached(ip)) {
             done.accept(false);
             return;
@@ -164,7 +172,9 @@ public final class AuthManager {
                     done.accept(false);
                     return;
                 }
-                dataManager.createPlayer(uuid, hash, ip != null ? ip : "unknown");
+                // 建号+登录收尾在区域线程（轻量），立即落库异步执行（关键操作防崩溃丢失）
+                dataManager.createPlayerInMemory(uuid, hash, ip != null ? ip : "unknown");
+                dataManager.saveNowAsync(uuid);
                 markLoggedIn(uuid);
                 onLoginSuccess(player);
                 fireEvent(new HTLoginRegisterEvent(uuid, player));
@@ -180,8 +190,7 @@ public final class AuthManager {
      */
     public boolean forceRegister(UUID uuid, String password) {
         Player online = Bukkit.getPlayer(uuid);
-        String ip = online != null && online.getAddress() != null
-                ? online.getAddress().getAddress().getHostAddress() : null;
+        String ip = online != null ? clientIp(online) : null;
         if (!createAccount(uuid, password, ip)) return false;
         fireEvent(new HTLoginRegisterEvent(uuid, online));
         return true;
@@ -218,9 +227,12 @@ public final class AuthManager {
             return;
         }
         final PlayerData snapshot = data;
-        // bcrypt 校验耗时，移到异步线程执行
+        // bcrypt 校验与算法对齐重哈希均耗时，移到异步线程执行
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             boolean ok = PasswordHash.checkPassword(password, snapshot.passwordHash());
+            // 密码算法对齐：配置算法与存储算法不一致时按配置算法重新哈希
+            // 哈希计算在异步线程完成（约 200-300ms），仅结果写回区域线程
+            String alignedHash = ok ? alignedPasswordHash(snapshot, password) : null;
             // 状态变更需回到玩家区域线程（Folia 线程安全）
             player.getScheduler().run(plugin, task2 -> {
                 verifying.remove(uuid);
@@ -228,10 +240,9 @@ public final class AuthManager {
                     handleLoginFailure(uuid, player);
                     done.accept(LoginResult.FAILED, isKicked(player) ? getKickRemaining(player) : 0L);
                 } else {
-                    // 密码算法对齐（密码明文仅此处可用，须在进入 2FA 等待前完成）
-                    alignPasswordHash(snapshot, password);
-                    String playerIp = player.getAddress() != null
-                            ? player.getAddress().getAddress().getHostAddress() : null;
+                    // 密码明文仅此处可用，须在进入 2FA 等待前完成对齐
+                    if (alignedHash != null) snapshot.passwordHash(alignedHash);
+                    String playerIp = clientIp(player);
                     if (requires2faAtLogin(uuid, playerIp)) {
                         // 密码正确但需双因素认证：进入待验证状态，不算已登录
                         // 开关关闭时跳过验证（密钥保留在数据库，重新开启后恢复）
@@ -272,7 +283,8 @@ public final class AuthManager {
                 handleLoginFailure(uuid, null);
                 done.accept(LoginResult.FAILED, isKicked(uuid) ? getKickRemaining(uuid) : 0L);
             } else {
-                alignPasswordHash(snapshot, password);
+                String alignedHash = alignedPasswordHash(snapshot, password);
+                if (alignedHash != null) snapshot.passwordHash(alignedHash);
                 if (requires2faAtLogin(uuid, ip)) {
                     pending2fa.add(uuid);
                     done.accept(LoginResult.NEED_2FA, 0L);
@@ -283,27 +295,30 @@ public final class AuthManager {
         });
     }
 
-    /** 密码算法对齐：配置算法与存储算法不一致时，用配置算法重新哈希（仅更新内存，随周期 flush 落库） */
-    private void alignPasswordHash(PlayerData data, String password) {
+    /** 密码算法对齐：配置算法与存储算法不一致时按配置算法重新哈希（异步线程调用，返回新哈希；无需对齐返回 null） */
+    private String alignedPasswordHash(PlayerData data, String password) {
         String configured = configManager.passwordHashAlgorithm();
         boolean storedIsBcrypt = PasswordHash.isBcrypt(data.passwordHash());
         boolean configIsBcrypt = "bcrypt".equalsIgnoreCase(configured);
-        if (configIsBcrypt != storedIsBcrypt) {
-            data.passwordHash(PasswordHash.hashPassword(password, configured, configManager.bcryptCost()));
-        }
+        if (configIsBcrypt == storedIsBcrypt) return null;
+        return PasswordHash.hashPassword(password, configured, configManager.bcryptCost());
     }
 
     /** 登录成功收尾：IP 变动提醒、更新 IP/时间/活跃时间、标记登录、恢复模式、触发事件（须在玩家区域线程调用） */
     private void completeLogin(Player player, PlayerData data) {
         UUID uuid = player.getUniqueId();
         String oldIp = data.ip();
-        data.lastLogin(System.currentTimeMillis() / 1000);
-        if (player.getAddress() != null) {
-            data.ip(player.getAddress().getAddress().getHostAddress());
+        String ip = clientIp(player);
+        long now = PlayerDataManager.nowEpochSeconds();
+        data.lastLogin(now);
+        if (ip != null) {
+            data.ip(ip);
         }
-        data.lastActive(System.currentTimeMillis() / 1000);
+        data.lastActive(now);
         dataManager.save(uuid);
 
+        // 建立登录会话：同 IP 短时间内重连免输密码（固定窗口，命中不续期）
+        markLoginSession(uuid, ip);
         markLoggedIn(uuid);
         // 正版回退玩家密码登录成功，清除回退标记（下次正版验证成功即自动免密）
         clearPremiumFallback(uuid);
@@ -316,18 +331,32 @@ public final class AuthManager {
                 && oldIp != null && !oldIp.isEmpty()
                 && !oldIp.equals(data.ip())
                 && notifyIpChangeFor(data)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.ip_changed", player, oldIp)));
+            player.sendMessage(I18n.msg("login.ip_changed", player, oldIp));
         }
     }
 
     /** 2FA 会话：验证码通过时的来源 IP 与到期时间戳 */
     private record TwoFaSession(String ip, long expiresAt) {}
 
+    /** 登录会话：验证通过时的来源 IP 与建立时间戳（固定窗口不滑动） */
+    private record LoginSession(String ip, long establishedAt) {}
+
+    /** 记录登录会话：验证通过后同 IP 且未过期免输密码（固定窗口，命中登录不刷新） */
+    private void markLoginSession(UUID uuid, String ip) {
+        if (!configManager.sessionEnabled() || ip == null) return;
+        loginSessions.put(uuid, new LoginSession(ip, System.currentTimeMillis()));
+    }
+
+    /** 清除登录会话（登出/强制操作/注销时调用：安全事件后不保留免密码信任） */
+    private void clearLoginSession(UUID uuid) {
+        loginSessions.remove(uuid);
+    }
+
     /** 记录 2FA 会话：验证码通过后同 IP 短时间内重连免验证码（固定窗口，命中不续期） */
     private void mark2faSession(UUID uuid, String ip) {
         if (!configManager.twoFaSessionEnabled() || ip == null) return;
         twoFaSessions.put(uuid, new TwoFaSession(ip,
-                System.currentTimeMillis() + configManager.twoFaSessionExpireMinutes() * 60_000L));
+                System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(configManager.twoFaSessionExpireMinutes())));
     }
 
     /** 2FA 会话是否命中（免验证码）：开关开启 + 同 IP 且未过期。
@@ -358,7 +387,7 @@ public final class AuthManager {
     /** 账号是否处于双因素认证生效状态（已绑定密钥且全局开关开启） */
     public boolean has2fa(UUID uuid) {
         PlayerData data = dataManager.getPlayer(uuid);
-        return data != null && data.totpSecret() != null && configManager.twoFactorEnabled();
+        return data != null && data.totpSecret() != null && configManager.twoFaEnabled();
     }
 
     /** 玩家是否处于双因素待验证状态（密码已通过，TOTP 未完成） */
@@ -396,7 +425,7 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null || data.totpSecret() == null) return false;
         if (has2faSession(uuid, ip)) return false;
-        return configManager.twoFactorEnabled()
+        return configManager.twoFaEnabled()
                 || data.passwordHash() == null || data.passwordHash().isEmpty();
     }
 
@@ -421,8 +450,7 @@ public final class AuthManager {
      * @return true 验证通过且登录完成
      */
     public boolean verify2fa(Player player, String code) {
-        PlayerData data = verify2faCode(player.getUniqueId(), player, code,
-                player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null);
+        PlayerData data = verify2faCode(player.getUniqueId(), player, code, clientIp(player));
         if (data == null) return false;
         completeLogin(player, data);
         return true;
@@ -491,7 +519,7 @@ public final class AuthManager {
 
     /** 临时密钥是否已超期（配置为 0 时永不过期） */
     private boolean isExpired2faSecret(long created) {
-        int seconds = configManager.twoFactorTempSecretExpireSeconds();
+        int seconds = configManager.twoFaTempSecretExpireSeconds();
         return seconds > 0 && System.currentTimeMillis() - created >= seconds * 1000L;
     }
 
@@ -511,7 +539,7 @@ public final class AuthManager {
 
     /** 周期清理所有过期的临时密钥（异步调度器调用） */
     private void cleanupExpired2faSecrets() {
-        int seconds = configManager.twoFactorTempSecretExpireSeconds();
+        int seconds = configManager.twoFaTempSecretExpireSeconds();
         if (seconds <= 0) return;
         long limit = seconds * 1000L;
         long now = System.currentTimeMillis();
@@ -542,7 +570,7 @@ public final class AuthManager {
     public void touchActive(Player player) {
         PlayerData data = dataManager.getPlayer(player.getUniqueId());
         if (data == null) return;
-        data.lastActive(System.currentTimeMillis() / 1000);
+        data.lastActive(PlayerDataManager.nowEpochSeconds());
         dataManager.save(player.getUniqueId());
     }
 
@@ -600,6 +628,7 @@ public final class AuthManager {
             data.lastLogin(0);
             dataManager.save(uuid);
         }
+        clearLoginSession(uuid);
         clear2faSession(uuid);
         fireEvent(new HTLoginLogoutEvent(uuid, Bukkit.getPlayer(uuid)));
         return true;
@@ -616,6 +645,7 @@ public final class AuthManager {
             data.lastLogin(0);
             dataManager.save(uuid);
         }
+        clearLoginSession(uuid);
         clear2faSession(uuid);
         return true;
     }
@@ -628,10 +658,10 @@ public final class AuthManager {
         fireEvent(new HTLoginLoginEvent(player));
     }
 
-    /** 登录会话是否命中（免输密码）：上次登录 IP 与当前一致，且未超过失效时间 */
+    /** 登录会话是否命中（免输密码）：上次验证 IP 与当前一致，且未超过失效时间 */
     public boolean hasSession(Player player) {
         if (player.getAddress() == null) return false;
-        return hasSession(player.getUniqueId(), player.getAddress().getAddress().getHostAddress());
+        return hasSession(player.getUniqueId(), clientIp(player));
     }
 
     /** 登录会话是否命中（无需 Player 对象，用于 AsyncPlayerSpawnLocationEvent） */
@@ -640,14 +670,12 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
         if (ip == null) return false;
-        String storedIp = data.ip();
-        if (storedIp == null || storedIp.isEmpty()) return false;
-        if (!ip.equals(storedIp)) return false;
-        // 失效时间下限为 1 分钟（配置层钳制），会话不存在永久有效
-        long lastLogin = data.lastLogin();
-        if (lastLogin <= 0) return false;
-        long expireMillis = configManager.sessionExpireMinutes() * 60L * 1000L;
-        return System.currentTimeMillis() - lastLogin * 1000L < expireMillis;
+        LoginSession s = loginSessions.get(uuid);
+        if (s == null) return false;
+        if (!s.ip().equals(ip)) return false;
+        // 固定窗口不滑动：命中登录不刷新建立时间，到期后需重新验证
+        long expireMillis = TimeUnit.MINUTES.toMillis(configManager.sessionExpireMinutes());
+        return System.currentTimeMillis() - s.establishedAt() < expireMillis;
     }
 
     // 免密登录：跳过密码验证直接完成登录（会话命中或正版验证通过后调用）
@@ -656,8 +684,7 @@ public final class AuthManager {
     public void autoLogin(Player player) {
         PlayerData data = dataManager.getPlayer(player.getUniqueId());
         if (data == null) return;
-        String ip = player.getAddress() != null
-                ? player.getAddress().getAddress().getHostAddress() : null;
+        String ip = clientIp(player);
         if (requires2faAtLogin(player.getUniqueId(), ip)) {
             pending2fa.add(player.getUniqueId());
             return;
@@ -756,6 +783,7 @@ public final class AuthManager {
         spectatorPending.remove(uuid);
         pendingUpgrade.remove(uuid);
         premiumFallback.remove(uuid);
+        clearLoginSession(uuid);
         clear2faSession(uuid);
         // 根据配置决定是否删除 Minecraft 原版玩家数据（player.dat）
         if (configManager.realUnreg()) {
@@ -1040,14 +1068,13 @@ public final class AuthManager {
         recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
     }
 
-    /** 清理可安全移除的失败计数：未达阈值，或超过过期时长未再失败（玩家可能已离线/已放弃尝试） */
+    /** 清理可安全移除的失败计数：超过过期时长未再失败（玩家可能已离线/已放弃尝试）。
+     *  不能按"未达阈值"清理——达阈值的条目在 handleLoginFailure 中已被 remove，Map 中不存在 ≥max 的条目，
+     *  按阈值清理恒真等于全清，攻击者可用大量假名洪水抹掉自己针对目标账号的累计进度 */
     private void evictStaleFailures(long now) {
         long resetMs = configManager.failProtectionResetSeconds() * 1000L;
-        failedAttempts.entrySet().removeIf(entry -> {
-            long[] v = entry.getValue();
-            return v[0] < configManager.failMaxAttempts()
-                    || (resetMs > 0 && now - v[1] >= resetMs);
-        });
+        if (resetMs <= 0) return;
+        failedAttempts.entrySet().removeIf(entry -> now - entry.getValue()[1] >= resetMs);
     }
 
     // ===== 坐标保护相关 =====

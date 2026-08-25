@@ -61,17 +61,17 @@ public final class ConfigManager {
     // IP 变动提醒：登录 IP 与上次不同时提示玩家
     private boolean ipChangeNotifyEnabled;
     // 双因素认证：全局开关（关闭后已绑定玩家跳过验证，密钥保留）
-    private boolean twoFactorEnabled;
+    private boolean twoFaEnabled;
     // 绑定时临时密钥的有效期（秒），0 = 永不过期
-    private int twoFactorTempSecretExpireSeconds;
+    private int twoFaTempSecretExpireSeconds;
     // 2FA 会话保持：验证码通过后同 IP 短时间内重连免验证码
     private boolean twoFaSessionEnabled;
     // 2FA 会话有效期（分钟），固定窗口，命中不续期
     private int twoFaSessionExpireMinutes;
     // 是否提供扫码网页入口（关闭后不向二维码服务发送密钥）
-    private boolean twoFactorQrEnabled;
+    private boolean twoFaQrEnabled;
     // 生成二维码的服务地址模板，{data} 占位符会被替换为 URL 编码后的 otpauth 资料
-    private String twoFactorQrUrl;
+    private String twoFaQrUrl;
 
     // 密码规则
     private int minPasswordLength;
@@ -165,11 +165,39 @@ public final class ConfigManager {
     public void load() {
         plugin.saveDefaultConfig();
         plugin.reloadConfig();
-
-        // 版本检查：config.yml 的 version 字段存储完整版本号
-        // - major.minor 变化：增量合并新配置键 + 覆盖语言文件（保留用户已有的自定义值，不整体覆盖）
-        // - patch 变化：仅覆盖语言文件，手动更新 version 字段（保留用户配置）
         FileConfiguration config = plugin.getConfig();
+
+        checkConfigVersion(config);
+        loadDatabaseConfig(config);
+        loadLoginConfig(config);
+        loadPasswordConfig(config);
+        loadRegisterConfig(config);
+        loadPreventConfig(config);
+        loadProtectionConfig(config);
+        loadPremiumConfig(config);
+
+        // 通用设置
+        this.realUnreg = config.getBoolean("settings.real-unreg", true);
+        this.purgeEnabled = config.getBoolean("settings.purge.enabled", false);
+        this.purgeDays = clampInt("settings.purge.days", config.getInt("settings.purge.days", 90), 1);
+
+        // 默认语言（控制台日志和客户端语言无匹配文件时使用）
+        String defaultLanguage = config.getString("settings.default-language", "zh_CN");
+        boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
+        I18n.setDefaultLocale(defaultLanguage);
+        I18n.setClientLanguageDetection(clientLanguageDetection);
+
+        // 有修正时写回 config.yml，避免下次启动重复告警
+        if (configDirty) {
+            plugin.saveConfig();
+            configDirty = false;
+        }
+    }
+
+    // 版本检查：config.yml 的 version 字段存储完整版本号
+    // - major.minor 变化：增量合并新配置键 + 覆盖语言文件（保留用户已有的自定义值，不整体覆盖）
+    // - patch 变化：仅覆盖语言文件，手动更新 version 字段（保留用户配置）
+    private void checkConfigVersion(FileConfiguration config) {
         String fileVersion = config.getString("version", "");
         String pluginVersion = plugin.getPluginMeta().getVersion();
 
@@ -196,10 +224,10 @@ public final class ConfigManager {
                 plugin.getLogger().warning(I18n.get("plugin.lang_version_mismatch", fileVersion, pluginVersion));
             }
         }
+    }
 
-        // 从 config.yml 加载各项配置参数
-
-        // 数据库设置
+    // 数据库设置
+    private void loadDatabaseConfig(FileConfiguration config) {
         this.databaseType = config.getString("database.type", "sqlite").toLowerCase(Locale.ROOT);
         // 数据库类型校验：仅支持 sqlite/mysql，非法值回退为 sqlite
         if (!"sqlite".equals(this.databaseType) && !"mysql".equals(this.databaseType)) {
@@ -225,8 +253,10 @@ public final class ConfigManager {
         // 记录数据库配置指纹，用于 reload 时检测是否需要重启
         this.databaseFingerprint = databaseType + "|" + mysqlHost + "|" + mysqlPort
                 + "|" + mysqlDatabase + "|" + mysqlUsername + "|" + mysqlPassword + "|" + poolSize;
+    }
 
-        // 登录设置
+    // 登录设置
+    private void loadLoginConfig(FileConfiguration config) {
         this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 120), 0);
         this.registerTimeout = clampInt("register.timeout", config.getInt("register.timeout", 180), 0);
         this.kickOnTimeout = config.getBoolean("login.kick-on-timeout", true);
@@ -249,16 +279,18 @@ public final class ConfigManager {
         }
         this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify.enabled", true);
         // 双因素认证
-        this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
-        this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
+        this.twoFaEnabled = config.getBoolean("login.2fa.enabled", true);
+        this.twoFaTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
                 config.getInt("login.2fa.expire-seconds", 300), 0);
         this.twoFaSessionEnabled = config.getBoolean("login.2fa.session.enabled", false);
         this.twoFaSessionExpireMinutes = clampInt("login.2fa.session.expire-minutes",
                 config.getInt("login.2fa.session.expire-minutes", 5), 1);
-        this.twoFactorQrEnabled = config.getBoolean("login.2fa.qr", true);
-        this.twoFactorQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
+        this.twoFaQrEnabled = config.getBoolean("login.2fa.qr", true);
+        this.twoFaQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
+    }
 
-        // 密码规则
+    // 密码规则
+    private void loadPasswordConfig(FileConfiguration config) {
         this.minPasswordLength = config.getInt("password.min-length", 6);
         this.maxPasswordLength = config.getInt("password.max-length", 32);
         // 密码长度配置校验：最小值不得小于 4
@@ -304,13 +336,17 @@ public final class ConfigManager {
                 this.passwordPattern = null;
             }
         }
+    }
 
-        // 注册限制
+    // 注册限制
+    private void loadRegisterConfig(FileConfiguration config) {
         this.maxAccountsPerIp = clampInt("register.max-accounts-per-ip.limit", config.getInt("register.max-accounts-per-ip.limit", 3), 0);
         // 连接阶段拦截未注册玩家（IP 已满时）的开关，默认开启保持严格；共享 IP 环境可关闭
         this.ipLimitRejectJoin = config.getBoolean("register.max-accounts-per-ip.reject-join", true);
+    }
 
-        // 行为限制
+    // 行为限制
+    private void loadPreventConfig(FileConfiguration config) {
         this.preventMove = config.getBoolean("prevent.move", true);
         this.preventLook = config.getBoolean("prevent.look", true);
         this.preventChat = config.getBoolean("prevent.chat", true);
@@ -324,8 +360,10 @@ public final class ConfigManager {
                 .toList();
         this.preventWorldInteraction = config.getBoolean("prevent.world-interaction", true);
         this.preventInventory = config.getBoolean("prevent.inventory", true);
+    }
 
-        // 登录前保护
+    // 登录前保护
+    private void loadProtectionConfig(FileConfiguration config) {
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
         this.protectionPosMode = config.getString("protection.pos.mode", "random");
         // 坐标模式校验：仅支持 random/fixed，非法值回退为 random
@@ -358,12 +396,10 @@ public final class ConfigManager {
             config.set("pearl.return", "item");
             configDirty = true;
         }
+    }
 
-        this.realUnreg = config.getBoolean("settings.real-unreg", true);
-        this.purgeEnabled = config.getBoolean("settings.purge.enabled", false);
-        this.purgeDays = clampInt("settings.purge.days", config.getInt("settings.purge.days", 90), 1);
-
-        // 正版验证
+    // 正版验证
+    private void loadPremiumConfig(FileConfiguration config) {
         this.premiumEnabled = config.getBoolean("premium.enabled", false);
         this.premiumAutoVerify = config.getBoolean("premium.auto-verify", true);
         // HTTP 出站代理列表（host:port）：借道代理访问真正的 Mojang 官方验证服务器。
@@ -408,18 +444,6 @@ public final class ConfigManager {
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", true);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
         this.premiumFallbackCacheSeconds = clampInt("premium.fallback.cache-seconds", config.getInt("premium.fallback.cache-seconds", 300), 30);
-
-        // 默认语言（控制台日志和客户端语言无匹配文件时使用）
-        String defaultLanguage = config.getString("settings.default-language", "zh_CN");
-        boolean clientLanguageDetection = config.getBoolean("settings.i18n", true);
-        I18n.setDefaultLocale(defaultLanguage);
-        I18n.setClientLanguageDetection(clientLanguageDetection);
-
-        // 有修正时写回 config.yml，避免下次启动重复告警
-        if (configDirty) {
-            plugin.saveConfig();
-            configDirty = false;
-        }
     }
 
     /**
@@ -534,12 +558,12 @@ public final class ConfigManager {
     public boolean loginDialogEnabled() { return loginDialogEnabled; }
     public boolean dialogAllowRiskyVersions() { return dialogAllowRiskyVersions; }
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
-    public boolean twoFactorEnabled() { return twoFactorEnabled; }
-    public int twoFactorTempSecretExpireSeconds() { return twoFactorTempSecretExpireSeconds; }
+    public boolean twoFaEnabled() { return twoFaEnabled; }
+    public int twoFaTempSecretExpireSeconds() { return twoFaTempSecretExpireSeconds; }
     public boolean twoFaSessionEnabled() { return twoFaSessionEnabled; }
     public int twoFaSessionExpireMinutes() { return twoFaSessionExpireMinutes; }
-    public boolean twoFactorQrEnabled() { return twoFactorQrEnabled; }
-    public String twoFactorQrUrl() { return twoFactorQrUrl; }
+    public boolean twoFaQrEnabled() { return twoFaQrEnabled; }
+    public String twoFaQrUrl() { return twoFaQrUrl; }
 
     // 密码规则
     public int minPasswordLength() { return minPasswordLength; }

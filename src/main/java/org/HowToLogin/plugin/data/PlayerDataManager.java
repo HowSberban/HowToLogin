@@ -272,11 +272,29 @@ public final class PlayerDataManager {
                 .toList();
     }
 
+    /** 当前 epoch 秒（PlayerData 时间戳字段的统一存储精度） */
+    public static long nowEpochSeconds() {
+        return System.currentTimeMillis() / 1000;
+    }
+
     public void createPlayer(UUID uuid, String passwordHash, String ip) {
-        PlayerData data = new PlayerData(uuid, null, passwordHash, ip, System.currentTimeMillis() / 1000, null, false, null, null, null, 0);
+        PlayerData data = new PlayerData(uuid, null, passwordHash, ip, nowEpochSeconds(), null, false, null, null, null, 0);
         players.put(uuid, data);
         // 创建账号为关键操作：立即落库，避免崩溃丢新账号（区别于登录/退出等的周期批量 flush）
         saveNow(data);
+    }
+
+    /** 仅内存建号（不落库）：供 registerAsync 在玩家区域线程调用，落库由调用方异步执行 */
+    public void createPlayerInMemory(UUID uuid, String passwordHash, String ip) {
+        players.put(uuid, new PlayerData(uuid, null, passwordHash, ip,
+                nowEpochSeconds(), null, false, null, null, null, 0));
+    }
+
+    /** 异步立即落库：供 registerAsync 等不可丢失的关键操作在区域线程触发，IO 在异步线程执行 */
+    public void saveNowAsync(UUID uuid) {
+        PlayerData data = players.get(uuid);
+        if (data == null) return;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> saveNow(data));
     }
 
     /** 立即同步落库单个玩家数据（用于注册等不可丢失的关键操作），失败时退化为脏标记由周期任务兜底重试 */
@@ -294,7 +312,7 @@ public final class PlayerDataManager {
      * 正版验证即身份凭证，无需密码；玩家可用 /addpassword 自行设置
      */
     public void createPremiumPlayer(UUID uuid, String name, String ip, String properties) {
-        PlayerData data = new PlayerData(uuid, name, "", ip, System.currentTimeMillis() / 1000, null, true, properties, null, null, 0);
+        PlayerData data = new PlayerData(uuid, name, "", ip, nowEpochSeconds(), null, true, properties, null, null, 0);
         players.put(uuid, data);
         if (name != null) {
             premiumNameIndex.put(name.toLowerCase(), uuid);
@@ -347,7 +365,7 @@ public final class PlayerDataManager {
         flushFailures.remove(offlineUuid);
         PlayerData premium = new PlayerData(premiumUuid, name, "",
                 ip != null && !ip.isEmpty() ? ip : offline.ip(),
-                System.currentTimeMillis() / 1000, offline.logoutLocation(), true, properties, offline.gameMode(),
+                nowEpochSeconds(), offline.logoutLocation(), true, properties, offline.gameMode(),
                 offline.totpSecret(), offline.lastActive());
         players.put(premiumUuid, premium);
         premiumNameIndex.put(name.toLowerCase(), premiumUuid);
@@ -419,7 +437,7 @@ public final class PlayerDataManager {
      * @return 清理的账号数量
      */
     public int purgeInactive(int days) {
-        long threshold = System.currentTimeMillis() / 1000 - days * 86400L;
+        long threshold = nowEpochSeconds() - days * 86400L;
         List<UUID> toDelete = new ArrayList<>();
         for (PlayerData data : players.values()) {
             if (data.premium()) continue;

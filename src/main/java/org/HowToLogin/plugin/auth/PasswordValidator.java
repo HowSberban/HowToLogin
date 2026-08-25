@@ -62,7 +62,7 @@ public final class PasswordValidator {
         java.util.regex.Pattern pattern = plugin.getConfigManager().passwordPattern();
         if (pattern == null) return false;
         if (!pattern.matcher(password).matches()) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.password_pattern", sender)));
+            sender.sendMessage(I18n.msg("command.password_pattern", sender));
             return true;
         }
         return false;

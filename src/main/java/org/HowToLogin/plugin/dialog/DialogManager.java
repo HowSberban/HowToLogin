@@ -32,6 +32,8 @@ public final class DialogManager {
     private final HTLogin plugin;
     // 2FA 密钥高亮色：聊天栏回退文本与 dialog 内密钥共用，突出可点击复制
     public static final TextColor HIGHLIGHT_COLOR = TextColor.color(0xFFAA00);
+    // 验证码输入框长度上限：TOTP 为 6 位数字，放宽以兼容误粘贴的空格/分隔符
+    private static final int CODE_INPUT_MAX_LENGTH = 10;
     // 回调选项：不限点击次数，1 小时有效期防止回调悬挂
     private static final ClickCallback.Options CALLBACK_OPTIONS = ClickCallback.Options.builder()
             .uses(ClickCallback.UNLIMITED_USES)
@@ -99,7 +101,7 @@ public final class DialogManager {
         body.add(DialogBody.plainMessage(Component.text(secret).color(HIGHLIGHT_COLOR)));
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
         // 有限时配置时追加红色过期提醒
-        int expireSeconds = plugin.getConfigManager().twoFactorTempSecretExpireSeconds();
+        int expireSeconds = plugin.getConfigManager().twoFaTempSecretExpireSeconds();
         if (expireSeconds > 0) {
             body.add(DialogBody.plainMessage(text(locale, "2fa.setup_expire", expireSeconds)));
         }
@@ -166,12 +168,12 @@ public final class DialogManager {
     /** 验证码输入框（2fa 验证与 2fa 绑定共用） */
     private DialogInput codeInput(String locale) {
         return DialogInput.text("code", text(locale, "dialog.code_label"))
-                .maxLength(10)
+                .maxLength(CODE_INPUT_MAX_LENGTH)
                 .build();
     }
 
     /** 按指定语言获取消息转 Adventure Component（配置阶段无 Player 对象，用客户端 locale） */
     static Component text(String locale, String key, Object... args) {
-        return HTLogin.legacy(I18n.getForLocale(key, locale, args));
+        return I18n.msgForLocale(key, locale, args);
     }
 }

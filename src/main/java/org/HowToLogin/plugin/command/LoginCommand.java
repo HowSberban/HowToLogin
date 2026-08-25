@@ -2,7 +2,6 @@ package org.howtologin.plugin.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
-import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
@@ -21,28 +20,28 @@ public final class LoginCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.already_logged_in", player)));
+            player.sendMessage(I18n.msg("login.already_logged_in", player));
             return;
         }
 
         if (!authManager.hasAccount(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.no_account", player)));
+            player.sendMessage(I18n.msg("login.no_account", player));
             return;
         }
 
         // 无密码账户不走密码登录，验证码是唯一登录因素
         if (authManager.isPasswordless(player.getUniqueId())) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.passwordless_no_password", player)));
+            player.sendMessage(I18n.msg("login.passwordless_no_password", player));
             return;
         }
 
         if (args.length < 1) {
-            player.sendMessage(HTLogin.legacy(I18n.get("login.usage", player)));
+            player.sendMessage(I18n.msg("login.usage", player));
             return;
         }
 
@@ -51,17 +50,17 @@ public final class LoginCommand implements BasicCommand {
         authManager.loginAsync(player, args[0], (result, kickSeconds) -> {
             switch (result) {
                 case SUCCESS -> {
-                    player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
+                    player.sendMessage(I18n.msg("login.success", player));
                     // 登录成功后传送回上次退出位置（启用坐标保护时生效）
                     authManager.returnToLogoutLocation(player);
                 }
-                case NEED_2FA -> player.sendMessage(HTLogin.legacy(I18n.get("login.need_2fa", player)));
+                case NEED_2FA -> player.sendMessage(I18n.msg("login.need_2fa", player));
                 case FAILED -> {
                     if (kickSeconds != null && kickSeconds > 0) {
                         // 踢出期内（本次失败达到上限触发）
-                        player.kick(HTLogin.legacy(I18n.get("login.kicked", kickSeconds)));
+                        player.kick(I18n.msg("login.kicked", kickSeconds));
                     } else {
-                        player.sendMessage(HTLogin.legacy(I18n.get("login.incorrect_password", player)));
+                        player.sendMessage(I18n.msg("login.incorrect_password", player));
                     }
                 }
             }

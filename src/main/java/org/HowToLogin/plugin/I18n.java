@@ -1,5 +1,6 @@
 package org.howtologin.plugin;
 
+import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
@@ -272,6 +273,28 @@ public final class I18n {
     /** 按指定语言获取消息并填充参数（无 Player 对象的场景，如配置阶段 Dialog）；locale 为 null 时用默认语言 */
     public static String getForLocale(String key, String locale, Object... args) {
         return format(getByLocale(key, locale == null ? defaultLocale : locale), args);
+    }
+
+    // ===== 返回 Component 的封装（内部完成 legacy 反序列化，消除 HTLogin.legacy(I18n.get(...)) 重复） =====
+
+    /** 玩家语言消息 → Component（发送给玩家，含参数填充） */
+    public static Component msg(String key, Player player, Object... args) {
+        return HTLogin.legacy(get(key, player, args));
+    }
+
+    /** sender 语言消息 → Component（发送给 sender，含参数填充） */
+    public static Component msg(String key, CommandSender sender, Object... args) {
+        return HTLogin.legacy(get(key, sender, args));
+    }
+
+    /** 默认语言消息 → Component（控制台/日志用，含参数填充） */
+    public static Component msg(String key, Object... args) {
+        return HTLogin.legacy(get(key, args));
+    }
+
+    /** 指定语言消息 → Component（无 Player 对象的场景，如配置阶段 Dialog） */
+    public static Component msgForLocale(String key, String locale, Object... args) {
+        return HTLogin.legacy(getForLocale(key, locale, args));
     }
 
     // ===== 内部方法 =====

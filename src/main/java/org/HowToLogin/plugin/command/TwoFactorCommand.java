@@ -77,12 +77,12 @@ public final class TwoFactorCommand {
 
     /** 按玩家语言解析消息组件 */
     private static Component msg(Player player, String key) {
-        return HTLogin.legacy(I18n.get(key, player));
+        return I18n.msg(key, player);
     }
 
     /** 全局开关 + 登录状态前置校验：不满足时发提示并返回 true（中止本次命令） */
     private boolean blocked(Player player) {
-        if (!plugin.getConfigManager().twoFactorEnabled()) {
+        if (!plugin.getConfigManager().twoFaEnabled()) {
             player.sendMessage(msg(player, "2fa.feature_disabled"));
             return true;
         }
@@ -169,8 +169,8 @@ public final class TwoFactorCommand {
 
     /** 生成二维码服务 URL 供扫码按钮打开；开关关闭或模板缺失 {data} 占位符时返回 null（省略扫码入口） */
     private String qrUrl(Player player, String secret) {
-        if (!plugin.getConfigManager().twoFactorQrEnabled()) return null;
-        String template = plugin.getConfigManager().twoFactorQrUrl();
+        if (!plugin.getConfigManager().twoFaQrEnabled()) return null;
+        String template = plugin.getConfigManager().twoFaQrUrl();
         if (template == null || !template.contains("{data}")) return null;
         // otpauth 资料：账号 + 密钥，拼好后整体编码一次（与 AuthMe 一致），交给二维码服务生成图片
         String data = "otpauth://totp/" + player.getName() + "?secret=" + secret;
@@ -180,9 +180,9 @@ public final class TwoFactorCommand {
 
     /** 红色过期提醒组件：配置为 0（永不过期）时返回 null */
     private Component expireReminder(Player player) {
-        int seconds = plugin.getConfigManager().twoFactorTempSecretExpireSeconds();
+        int seconds = plugin.getConfigManager().twoFaTempSecretExpireSeconds();
         if (seconds <= 0) return null;
-        return HTLogin.legacy(I18n.get("2fa.setup_expire", player, seconds));
+        return I18n.msg("2fa.setup_expire", player, seconds);
     }
 
     /** 可点击复制组件：金色突出提示可点击，内容即展示文本，点击复制到剪贴板 */
@@ -247,7 +247,7 @@ public final class TwoFactorCommand {
     private int handleVerify(CommandContext<CommandSourceStack> ctx) {
         Player player = (Player) ctx.getSource().getSender();
         // 无密码账户不受全局开关影响：验证码是其唯一登录因素
-        if (!plugin.getConfigManager().twoFactorEnabled()
+        if (!plugin.getConfigManager().twoFaEnabled()
                 && !authManager.isPasswordless(player.getUniqueId())) {
             player.sendMessage(msg(player, "2fa.feature_disabled"));
             return Command.SINGLE_SUCCESS;
@@ -255,7 +255,7 @@ public final class TwoFactorCommand {
         String code = StringArgumentType.getString(ctx, "code");
         // 暴力破解踢出期内拒绝验证（验证码错误与密码错误同待遇，达阈值即踢出）
         if (authManager.isKicked(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("2fa.kicked", player, authManager.getKickRemaining(player))));
+            player.sendMessage(I18n.msg("2fa.kicked", player, authManager.getKickRemaining(player)));
             return Command.SINGLE_SUCCESS;
         }
         if (!authManager.isPending2fa(player.getUniqueId())) {

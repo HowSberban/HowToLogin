@@ -24,23 +24,23 @@ public final class ChangePasswordCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.must_login", player)));
+            player.sendMessage(I18n.msg("changepw.must_login", player));
             return;
         }
 
         // 无密码账户没有旧密码，设置密码走 /addpassword
         if (authManager.isPasswordless(player.getUniqueId())) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.use_addpassword", player)));
+            player.sendMessage(I18n.msg("changepw.use_addpassword", player));
             return;
         }
 
         if (args.length < 2) {
-            player.sendMessage(HTLogin.legacy(I18n.get("changepw.usage", player)));
+            player.sendMessage(I18n.msg("changepw.usage", player));
             return;
         }
 
@@ -51,6 +51,6 @@ public final class ChangePasswordCommand implements BasicCommand {
 
         // 异步修改：旧密码校验与新密码哈希（bcrypt 耗时）在异步线程执行，回调回到玩家区域线程
         authManager.changePasswordAsync(player, oldPassword, newPassword, success ->
-                player.sendMessage(HTLogin.legacy(I18n.get(success ? "changepw.success" : "changepw.incorrect_old", player))));
+                player.sendMessage(I18n.msg(success ? "changepw.success" : "changepw.incorrect_old", player)));
     }
 }

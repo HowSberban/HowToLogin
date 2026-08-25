@@ -25,22 +25,22 @@ public final class AddPasswordCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("addpassword.must_login", player)));
+            player.sendMessage(I18n.msg("addpassword.must_login", player));
             return;
         }
 
         if (!authManager.isPasswordless(player.getUniqueId())) {
-            player.sendMessage(HTLogin.legacy(I18n.get("addpassword.has_password", player)));
+            player.sendMessage(I18n.msg("addpassword.has_password", player));
             return;
         }
 
         if (args.length < 2) {
-            player.sendMessage(HTLogin.legacy(I18n.get("addpassword.usage", player)));
+            player.sendMessage(I18n.msg("addpassword.usage", player));
             return;
         }
 
@@ -48,7 +48,7 @@ public final class AddPasswordCommand implements BasicCommand {
         String confirm = args[1];
 
         if (!password.equals(confirm)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.password_mismatch", player)));
+            player.sendMessage(I18n.msg("register.password_mismatch", player));
             return;
         }
 
@@ -56,6 +56,6 @@ public final class AddPasswordCommand implements BasicCommand {
 
         // 异步设置：bcrypt 哈希耗时，避免阻塞玩家区域线程；回调在玩家区域线程执行
         authManager.addPasswordAsync(player, password, success ->
-                player.sendMessage(HTLogin.legacy(I18n.get(success ? "addpassword.success" : "addpassword.failed", player))));
+                player.sendMessage(I18n.msg(success ? "addpassword.success" : "addpassword.failed", player)));
     }
 }

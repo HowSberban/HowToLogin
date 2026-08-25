@@ -48,6 +48,8 @@ public final class PreJoinAuthListener implements Listener {
     private final Map<UUID, AuthOutcome> outcomes = new ConcurrentHashMap<>();
     // 活跃的配置阶段会话（Dialog 提交回调查找）
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
+    // timeout=0 时的兜底等待上限（秒）：防止配置阶段断开导致 Session+阻塞线程泄漏
+    private static final int CONFIG_WAIT_FALLBACK_SECONDS = 600;
 
     /** 配置阶段会话：连接 + 完成信号（配置线程阻塞等待 Dialog 提交结果） */
     private static final class Session {
@@ -131,16 +133,14 @@ public final class PreJoinAuthListener implements Listener {
             } else {
                 showRegister(session, uuid, locale, null);
             }
-            // 阻塞配置线程直到认证完成/超时（timeout=0 无限等待；虚拟线程阻塞开销极小）
+            // 阻塞配置线程直到认证完成/超时（虚拟线程阻塞开销极小）
+            // timeout=0 时不真正无限等待：Paper 无配置阶段断开事件，客户端断开无回调释放 latch，
+            // 无下限会导致 Session+阻塞线程随恶意连接累积泄漏；10 分钟兜底到点走超时断连释放
             ConfigManager cfg = plugin.getConfigManager();
             int timeout = isLogin ? cfg.loginTimeout() : cfg.registerTimeout();
-            if (timeout <= 0) {
-                session.latch.await();
-            } else {
-                // 认证结果由上方 session 标志判断，await 返回值无需使用
-                //noinspection ResultOfMethodCallIgnored
-                session.latch.await(timeout, TimeUnit.SECONDS);
-            }
+            // 认证结果由上方 session 标志判断，await 返回值无需使用
+            //noinspection ResultOfMethodCallIgnored
+            session.latch.await(timeout > 0 ? timeout : CONFIG_WAIT_FALLBACK_SECONDS, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } finally {
@@ -153,7 +153,7 @@ public final class PreJoinAuthListener implements Listener {
         }
         // 超时未完成：kick-on-timeout 开启时踢出，否则由 onJoin 的 beginAuthFlow 接管
         if (plugin.getConfigManager().kickOnTimeout()) {
-            conn.disconnect(HTLogin.legacy(I18n.getForLocale("listener.login_timeout", locale)));
+            conn.disconnect(I18n.msgForLocale("listener.login_timeout", locale));
         }
     }
 
@@ -235,7 +235,7 @@ public final class PreJoinAuthListener implements Listener {
 
     private void show2fa(Session session, UUID uuid, String locale, Component error) {
         showDialog(session, dialogManager.build2faDialog(locale, error,
-                twoFactorConfirm(session, uuid, locale), cancel(session, uuid, locale)));
+                twoFaConfirm(session, uuid, locale), cancel(session, uuid, locale)));
     }
 
     /** 取消：主动放弃登录并断连（pre-join 阶段尚未进世界）；标记 kicked 使 onConfigure 不放行，并唤醒配置线程 */
@@ -244,7 +244,7 @@ public final class PreJoinAuthListener implements Listener {
             if (sessions.get(uuid) != session) return;
             session.kicked = true;
             session.latch.countDown();
-            session.connection.disconnect(HTLogin.legacy(I18n.getForLocale("dialog.cancelled", locale)));
+            session.connection.disconnect(I18n.msgForLocale("dialog.cancelled", locale));
         };
     }
 
@@ -279,8 +279,7 @@ public final class PreJoinAuthListener implements Listener {
                     case FAILED -> {
                         if (kickSeconds != null && kickSeconds > 0) {
                             session.kicked = true;
-                            session.connection.disconnect(HTLogin.legacy(
-                                    I18n.getForLocale("login.kicked", locale, kickSeconds)));
+                            session.connection.disconnect(I18n.msgForLocale("login.kicked", locale, kickSeconds));
                             session.latch.countDown();
                         } else {
                             showLogin(session, uuid, locale, DialogManager.text(locale, "login.incorrect_password"));
@@ -325,8 +324,7 @@ public final class PreJoinAuthListener implements Listener {
                     session.latch.countDown();
                 } else if (authManager.isIpAccountLimitReached(ip)) {
                     // 同 IP 注册数量已达上限：精确提示（连接层已拦已满 IP，此处兜底并发/延迟场景）
-                    showRegister(session, uuid, locale, HTLogin.legacy(
-                            I18n.getForLocale("register.ip_limit", locale, plugin.getConfigManager().maxAccountsPerIp())));
+                    showRegister(session, uuid, locale, I18n.msgForLocale("register.ip_limit", locale, plugin.getConfigManager().maxAccountsPerIp()));
                 } else {
                     showRegister(session, uuid, locale, DialogManager.text(locale, "register.failed"));
                 }
@@ -335,14 +333,14 @@ public final class PreJoinAuthListener implements Listener {
     }
 
     /** 双因素验证窗口确认：通过放行，失败重弹 */
-    private DialogActionCallback twoFactorConfirm(Session session, UUID uuid, String locale) {
+    private DialogActionCallback twoFaConfirm(Session session, UUID uuid, String locale) {
         return (response, audience) -> {
             if (sessions.get(uuid) != session) return;
             // 暴力破解踢出期内断连（无密码账户验证码错误达到阈值后进入踢出期，与密码登录失败行为一致）
             long kickRemaining = authManager.getKickRemaining(uuid);
             if (kickRemaining > 0) {
                 session.kicked = true;
-                session.connection.disconnect(HTLogin.legacy(I18n.getForLocale("2fa.kicked", locale, kickRemaining)));
+                session.connection.disconnect(I18n.msgForLocale("2fa.kicked", locale, kickRemaining));
                 session.latch.countDown();
                 return;
             }

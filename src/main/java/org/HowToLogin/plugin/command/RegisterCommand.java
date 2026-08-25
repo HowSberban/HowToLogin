@@ -24,17 +24,17 @@ public final class RegisterCommand implements BasicCommand {
     public void execute(CommandSourceStack stack, String @NotNull [] args) {
         CommandSender sender = stack.getSender();
         if (!(sender instanceof Player player)) {
-            sender.sendMessage(HTLogin.legacy(I18n.get("command.player_only")));
+            sender.sendMessage(I18n.msg("command.player_only"));
             return;
         }
 
         if (args.length < 2) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.usage", player)));
+            player.sendMessage(I18n.msg("register.usage", player));
             return;
         }
 
         if (authManager.hasAccount(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.already_registered", player)));
+            player.sendMessage(I18n.msg("register.already_registered", player));
             return;
         }
 
@@ -42,27 +42,27 @@ public final class RegisterCommand implements BasicCommand {
         String confirm = args[1];
 
         if (!password.equals(confirm)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.password_mismatch", player)));
+            player.sendMessage(I18n.msg("register.password_mismatch", player));
             return;
         }
 
         if (PasswordValidator.invalid(plugin, player, password)) return;
 
         // 同 IP 注册数量上限：此处拦截并精确提示；registerAsync 内仍有兜底判定（并发场景）
-        var playerIp = player.getAddress() != null ? player.getAddress().getAddress().getHostAddress() : null;
+        var playerIp = AuthManager.clientIp(player);
         if (authManager.isIpAccountLimitReached(playerIp)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("register.ip_limit", player, plugin.getConfigManager().maxAccountsPerIp())));
+            player.sendMessage(I18n.msg("register.ip_limit", player, plugin.getConfigManager().maxAccountsPerIp()));
             return;
         }
 
         // 异步注册：bcrypt 哈希耗时，避免阻塞玩家区域线程；回调在玩家区域线程执行
         authManager.registerAsync(player, password, success -> {
             if (success) {
-                player.sendMessage(HTLogin.legacy(I18n.get("register.success", player)));
+                player.sendMessage(I18n.msg("register.success", player));
                 // 注册成功后传送到默认世界 spawn（启用坐标保护时生效）
                 authManager.returnToLogoutLocation(player);
             } else {
-                player.sendMessage(HTLogin.legacy(I18n.get("register.failed", player)));
+                player.sendMessage(I18n.msg("register.failed", player));
             }
         });
     }

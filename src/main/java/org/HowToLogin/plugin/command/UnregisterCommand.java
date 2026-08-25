@@ -55,16 +55,16 @@ public final class UnregisterCommand {
             UUID targetUuid = target.getUniqueId();
 
             if (!authManager.unregister(targetUuid)) {
-                sender.sendMessage(HTLogin.legacy(I18n.get("htlogin.accounts_not_found", sender)));
+                sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
                 return;
             }
 
             // 若目标在线则踢出，下次进服需重新注册
             if (onlinePlayer != null) {
-                onlinePlayer.kick(HTLogin.legacy(I18n.get("unregister.kick", onlinePlayer)));
+                onlinePlayer.kick(I18n.msg("unregister.kick", onlinePlayer));
             }
 
-            sender.sendMessage(HTLogin.legacy(I18n.get("unregister.success", sender, targetName)));
+            sender.sendMessage(I18n.msg("unregister.success", sender, targetName));
         });
         return Command.SINGLE_SUCCESS;
     }
