@@ -10,17 +10,17 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
+import com.destroystokyo.paper.event.entity.EntityAddToWorldEvent;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 
 import java.io.File;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.ConcurrentModificationException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,27 +32,36 @@ import java.util.concurrent.ConcurrentHashMap;
  * 原版 1.21.2+（Paper）珍珠随玩家退出存入玩家数据，重入时恢复实体继续飞行，
  * 恢复的珍珠落地会传送未登录玩家，绕过登录位置保护——这是要拦截的场景
  * Folia 移除了该机制（线程安全原因）：珍珠不保存不恢复，退出后留在世界里
- * Canvas（Folia 分支）用核心层 pearls.dat 恢复了该机制
- * 三种服务端行为不同，故采用统一接管路径 + 吸收替换语义，不做平台检测：
- * - onQuit：接管玩家飞行珍珠（快照+移除）——纯 Folia 上是唯一接管时机，
- *   Paper/Canvas 上与核心的保存并存（顺序不确定，由替换语义消解）
- * - onJoin：接管核心恢复的飞行珍珠，替换 pending 中同一批珍珠的旧快照
- * - returnPearls：返还前再吸收一次（封住核心迟到恢复的窗口），替换后返还
- * - onPearlTeleport：未登录玩家被珍珠传送时兜底拦截+按落点记账补偿。
+ * Canvas（Folia 分支）用核心层 pearls.dat 恢复了该机制，但恢复实体在 join 之后
+ * 才生成且不注册进 getEnderPearls()，事件级接管看不见它
+ * 三种服务端行为不同，故所有入口收敛到统一记账原语 absorb，不做平台检测：
+ * - onQuit：玩家退出时接管其飞行珍珠（纯 Folia 上是唯一接管时机，
+ *   Paper/Canvas 上与核心的保存并存——同区域时同步移除抢在核心保存之前，
+ *   核心自然无珍珠可存，不产生恢复副本）
+ * - onEntityAddToWorld：实体级拦截（时机无关的主动防线）。核心恢复的珍珠一进
+ *   世界即接管，不依赖事件时序与 getEnderPearls() 注册（Canvas 两者都不满足），
+ *   也覆盖 Folia 区块重载的退出残留
+ * - returnPearls：返还前再吸收一次，封住核心迟到恢复的窗口
+ * - onPearlTeleport：未登录玩家被珍珠传送时兜底拦截+按落点记账补偿（仅 Paper 有效，
+ *   Folia/Canvas 不触发 ENDER_PEARL 的 PlayerTeleportEvent，Folia#490）。
  *   正常时序下不会触发（未登录玩家投不出珍珠，飞行珍珠都被接管点捕获），
- *   只覆盖接管机制自身的失效窗口：Folia 下读珍珠列表的并发修改漏读、
- *   极端 lag 下核心恢复晚于 onJoin。防线全失效时这是最后一道闸——
+ *   只覆盖接管机制自身的失效窗口。防线全失效时这是最后一道闸——
  *   不拦截即坐标保护被绕过。补偿记账仅记落点（珍珠已消耗，速度不可知）
- * 替换语义保证任何时序下只有一份权威副本：登录时世界上有珍珠 → 以实体为准；
- * 没有 → 以退出时的快照为准。任何情况下都不会双倍返还
+ * absorb 记账语义（幂等）：珍珠状态与该玩家已记快照同值 → 视为已计数，
+ * 仅移除世界副本防双倍；无同值快照 → 追加快照后移除。任何时序下同一颗珍珠
+ * 只有一份账目，不会双倍返还
+ * 归属链：shooter（投掷路径，内存 projectileSource 可解析）→ NBT Owner UUID 反射
+ * （核心 NBT 恢复/区块重载路径，projectileSource 丢失但 Owner 持久在 NBT），
+ * 均失败则无法归属，不接管
  * 登录成功后按 pearl.return 配置返还：
  * item = 作为物品进入背包；entity = 在接管时的位置重新生成飞行珍珠（延续原轨迹）
  * 记录持久化到 pearls.dat（单服数据无协同需求，不占用数据库）
  * pearl.enabled 关闭时所有入口均不工作（不接管/不返还），
  * refresh()（启动与 reload）此时清空内存记录与 dat 文件内容
- * Folia：退出/进入事件在不同区域线程触发，集合均用并发容器，
- * 珍珠删除走实体调度器（珍珠可能位于其他区域），返还走玩家调度器（onLoginSuccess 内），
- * entity 模式重生走珍珠位置对应的区域调度器
+ * Folia：各事件在不同区域线程触发，集合均用并发容器，
+ * 珍珠移除优先同区域同步执行，跨区域走实体调度器（实体添加事件内
+ * 禁止直接移除，区块状态更新期间会被服务端拒绝），
+ * 返还走玩家调度器（onLoginSuccess 内），entity 模式重生走珍珠位置对应的区域调度器
  */
 public final class PendingPearlManager implements Listener {
 
@@ -64,6 +73,10 @@ public final class PendingPearlManager implements Listener {
     private final File file;
     // 待返还的珍珠快照（接管时写入，启动时从 dat 读入，列表不可变保证并发读安全）
     private final Map<UUID, List<PearlSnapshot>> pending = new ConcurrentHashMap<>();
+    // 快照匹配容差：核心 NBT 恢复的坐标/速度与退出快照同为双精度原值，容差仅防浮点噪声
+    private static final double STATE_MATCH_EPSILON = 1e-6;
+    // NMS ThrowableProjectile.getOwnerUUID() 反射缓存（核心 NBT 恢复路径的珍珠归属）
+    private static Method ownerUuidMethod;
 
     public PendingPearlManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -80,32 +93,37 @@ public final class PendingPearlManager implements Listener {
         saveSync();
     }
 
-    // 退出：接管玩家飞行珍珠（快照+移除），防止留在世界上落地传送（纯 Folia 无核心保存，
-    // 此处为唯一接管时机；Paper/Canvas 上核心也会保存，竞态由 onJoin 的替换语义消解）
+    // 退出：接管玩家飞行珍珠，防止留在世界上落地传送（纯 Folia 无核心保存，
+    // 此处为唯一接管时机；Paper/Canvas 上同区域时同步移除抢在核心保存之前）
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         if (!plugin.getConfigManager().pearlEnabled()) return;
-        Player player = event.getPlayer();
-        List<PearlSnapshot> snapshots = takeOver(player);
-        if (snapshots == null) return;
-        pending.put(player.getUniqueId(), snapshots);
-        save();
+        UUID uuid = event.getPlayer().getUniqueId();
+        boolean changed = false;
+        for (EnderPearl pearl : copyFlyingPearls(event.getPlayer())) {
+            absorb(pearl, uuid);
+            changed = true;
+        }
+        if (changed) save();
     }
 
-    // 进入世界：接管核心恢复的飞行珍珠并替换 pending——同一批珍珠以实体为准，防止双倍
-    // 纯 Folia 无恢复，此路径为空操作（pending 保留退出时的快照）
+    // 实体级拦截（时机无关的主动防线，见类注释）：核心恢复的珍珠一进世界即接管，
+    // 不依赖 PlayerJoinEvent 时序与 getEnderPearls() 注册（Canvas 两者都不满足）
     @EventHandler(priority = EventPriority.MONITOR)
-    public void onJoin(PlayerJoinEvent event) {
+    public void onEntityAddToWorld(EntityAddToWorldEvent event) {
+        if (!(event.getEntity() instanceof EnderPearl pearl)) return;
         if (!plugin.getConfigManager().pearlEnabled()) return;
-        Player player = event.getPlayer();
-        List<PearlSnapshot> snapshots = takeOver(player);
-        // 无恢复珍珠且无旧记录：不覆盖 pending（退出时快照的珍珠仍有效）
-        if (snapshots == null) return;
-        pending.put(player.getUniqueId(), snapshots);
+        UUID owner = resolveOwner(pearl);
+        if (owner == null) return;
+        // 归属玩家的在线实体存在（已登录正常投掷/本插件 entity 模式返还的重生），不拦截
+        Player player = Bukkit.getPlayer(owner);
+        if (player != null && plugin.getAuthManager().isLoggedIn(player)) return;
+        absorb(pearl, owner);
         save();
     }
 
     // 未登录玩家被珍珠传送：兜底拦截（保险丝，正常时序不触发，见类注释）
+    // 仅 Paper 有效——Folia/Canvas 不触发 ENDER_PEARL 的 PlayerTeleportEvent（Folia#490）
     // 只可能来自接管失效窗口漏网的珍珠；拦截传送防坐标保护被绕过。
     // 珍珠已消耗，按落点记账补偿（速度不可知，记零速度），登录后与其他珍珠一并返还：
     // entity 模式在落点重生静止珍珠，下坠撞地方块才触发传送（落点悬空时实际传送点略偏下）；
@@ -134,13 +152,17 @@ public final class PendingPearlManager implements Listener {
      *  开关关闭时完全不工作（保管记录由 refresh() 在启动/reload 时清空） */
     public void returnPearls(Player player) {
         if (!plugin.getConfigManager().pearlEnabled()) return;
-        // 返还前再吸收一次：封住核心迟到恢复珍珠的窗口（同样替换语义）
-        List<PearlSnapshot> absorbed = takeOver(player);
-        if (absorbed != null) {
-            pending.put(player.getUniqueId(), absorbed);
+        // 返还前再吸收一次：封住核心迟到恢复珍珠的窗口（同一记账语义）
+        boolean absorbed = false;
+        for (EnderPearl pearl : copyFlyingPearls(player)) {
+            absorb(pearl, player.getUniqueId());
+            absorbed = true;
         }
         List<PearlSnapshot> snapshots = pending.remove(player.getUniqueId());
-        if (snapshots == null || snapshots.isEmpty()) return;
+        if (snapshots == null || snapshots.isEmpty()) {
+            if (absorbed) saveSync();
+            return;
+        }
         // 先清记录再发放：发放前崩溃宁可少还，不重复还。
         // 此处须同步写盘：异步写崩溃时会丢这次清记录，重启后旧记录读回导致重复返还
         saveSync();
@@ -182,35 +204,100 @@ public final class PendingPearlManager implements Listener {
     }
 
     /**
-     * 接管玩家当前飞行珍珠：快照后移除实体
-     * @return 快照列表；玩家当前无飞行珍珠时返回 null（调用方据 null 与否决定是否覆盖 pending）
+     * 统一记账原语：接管一颗珍珠进待返还账目（幂等）
+     * 与该玩家已记快照同值 → 视为已计数，仅移除世界副本（防双倍返还）；
+     * 无同值快照 → 追加快照后移除（新接管，或核心恢复/区块重载的退出残留）
      */
-    // getEnderPearls() 标记为 @ApiStatus.Experimental，实际为 Paper 稳定提供的实体视图 API
-    @SuppressWarnings("UnstableApiUsage")
-    private List<PearlSnapshot> takeOver(Player player) {
-        List<EnderPearl> pearls;
+    private void absorb(EnderPearl pearl, UUID owner) {
+        Location loc = pearl.getLocation();
+        World world = loc.getWorld();
+        if (world == null) return;
+        Vector vel = pearl.getVelocity();
+        String worldName = world.getName();
+        if (!hasMatchingSnapshot(owner, worldName, loc, vel)) {
+            PearlSnapshot snapshot = new PearlSnapshot(worldName, loc.getX(), loc.getY(), loc.getZ(),
+                    vel.getX(), vel.getY(), vel.getZ());
+            pending.merge(owner, List.of(snapshot), (oldList, newList) -> {
+                List<PearlSnapshot> merged = new ArrayList<>(oldList);
+                merged.addAll(newList);
+                return List.copyOf(merged);
+            });
+        }
+        removePearl(pearl);
+    }
+
+    /**
+     * 解析珍珠归属：shooter → NBT Owner UUID 反射 → null（无法归属不接管）
+     * 投掷路径写入内存 projectileSource，getShooter 可解析；
+     * 核心 NBT 恢复路径不写 projectileSource，须读 NBT 持久化的 Owner UUID
+     */
+    private UUID resolveOwner(EnderPearl pearl) {
+        if (pearl.getShooter() instanceof Player player) {
+            return player.getUniqueId();
+        }
+        return readOwnerUuid(pearl);
+    }
+
+    /** 反射读取 NMS Owner UUID（Bukkit 包装类无此 API；getHandle 取 NMS 实体后调 getOwnerUUID，
+     *  1.20.5+ 运行时 Mojang 映射下方法名稳定），失败返回 null */
+    private static UUID readOwnerUuid(EnderPearl pearl) {
         try {
-            pearls = List.copyOf(player.getEnderPearls());
-        } catch (ConcurrentModificationException e) {
-            // Folia 下珍珠在其他区域线程消亡会并发修改该列表，弱一致读失败按无珍珠处理
-            // 漏读的珍珠由传送兜底拦截（onPearlTeleport）补偿
+            Object handle = pearl.getClass().getMethod("getHandle").invoke(pearl);
+            if (ownerUuidMethod == null) {
+                ownerUuidMethod = handle.getClass().getMethod("getOwnerUUID");
+            }
+            return (UUID) ownerUuidMethod.invoke(handle);
+        } catch (Exception e) {
             return null;
         }
-        if (pearls.isEmpty()) return null;
-        List<PearlSnapshot> snapshots = new ArrayList<>(pearls.size());
-        for (EnderPearl pearl : pearls) {
-            if (!pearl.isValid()) continue;
-            Location loc = pearl.getLocation();
-            World world = loc.getWorld();
-            if (world == null) continue;
-            Vector vel = pearl.getVelocity();
-            snapshots.add(new PearlSnapshot(world.getName(), loc.getX(), loc.getY(), loc.getZ(),
-                    vel.getX(), vel.getY(), vel.getZ()));
-            // 实体调度器：珍珠可能位于其他区域，删除必须在其所在区域线程执行
-            // 已消亡实体的调度器为 retired 状态，任务直接跳过，无副作用
-            pearl.getScheduler().run(plugin, task -> pearl.remove(), null);
+    }
+
+    /** 读取玩家当前飞行珍珠的弱一致副本，失败按无珍珠处理 */
+    // getEnderPearls() 标记为 @ApiStatus.Experimental，实际为 Paper 稳定提供的实体视图 API
+    @SuppressWarnings("UnstableApiUsage")
+    private static List<EnderPearl> copyFlyingPearls(Player player) {
+        try {
+            return List.copyOf(player.getEnderPearls());
+        } catch (Exception e) {
+            // Folia 下珍珠在其他区域线程消亡会并发修改该列表（CME），按无珍珠处理；
+            // 漏读的珍珠由实体级拦截（区块重载时）与传送兜底拦截（仅 Paper）补偿
+            return List.of();
         }
-        return snapshots.isEmpty() ? null : List.copyOf(snapshots);
+    }
+
+    /** 珍珠是否已计入指定玩家的待返还快照（世界+位置+速度同值） */
+    private boolean hasMatchingSnapshot(UUID owner, String world, Location loc, Vector vel) {
+        List<PearlSnapshot> snapshots = pending.get(owner);
+        if (snapshots == null) return false;
+        for (PearlSnapshot s : snapshots) {
+            if (sameState(s, world, loc, vel)) return true;
+        }
+        return false;
+    }
+
+    /** 状态比对：世界一致且位置/速度在极小容差内（NBT 双精度保存恢复无损，容差仅防浮点噪声） */
+    private static boolean sameState(PearlSnapshot s, String world, Location loc, Vector vel) {
+        return s.world().equals(world)
+                && Math.abs(s.x() - loc.getX()) < STATE_MATCH_EPSILON
+                && Math.abs(s.y() - loc.getY()) < STATE_MATCH_EPSILON
+                && Math.abs(s.z() - loc.getZ()) < STATE_MATCH_EPSILON
+                && Math.abs(s.vx() - vel.getX()) < STATE_MATCH_EPSILON
+                && Math.abs(s.vy() - vel.getY()) < STATE_MATCH_EPSILON
+                && Math.abs(s.vz() - vel.getZ()) < STATE_MATCH_EPSILON;
+    }
+
+    /**
+     * 移除珍珠：当前线程即珍珠所属区域时同步执行（退出接管抢在核心保存读列表之前，
+     * 核心 NBT 自然无珍珠可存，重入不再产生恢复副本）；
+     * 跨区域或实体添加事件内（禁止直接移除，区块状态更新期间会被拒绝）走实体调度器
+     */
+    private void removePearl(EnderPearl pearl) {
+        if (Bukkit.isOwnedByCurrentRegion(pearl.getLocation())) {
+            pearl.remove();
+            return;
+        }
+        // 已消亡实体的调度器为 retired 状态，任务直接跳过，无副作用
+        pearl.getScheduler().run(plugin, task -> pearl.remove(), null);
     }
 
     /** 物品方式返还：优先入背包，溢出部分掉落地面 */
@@ -252,7 +339,7 @@ public final class PendingPearlManager implements Listener {
         }
     }
 
-    /** 记账路径写盘（退出/进入/传送拦截，区域线程高频调用）：异步执行避免阻塞区域线程。
+    /** 记账路径写盘（退出/实体拦截/传送拦截，区域线程高频调用）：异步执行避免阻塞区域线程。
      *  返还路径的清记录须用 saveSync（崩溃语义），不走此处 */
     private void save() {
         // 全量写执行时刻的最新 pending，最终一致
