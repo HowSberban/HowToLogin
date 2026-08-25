@@ -175,7 +175,7 @@ public final class PlayerDataManager {
         }
     }
 
-    /** 周期任务调用：将脏标记的玩家数据批量落库，失败按上限重试 */
+    /** 周期任务调用（已在异步调度线程）：将脏标记的玩家数据批量落库，失败按上限重试 */
     public void flushDirty() {
         if (dirty.isEmpty()) return;
         final List<PlayerData> toSave = new ArrayList<>(dirty.size());
@@ -187,23 +187,21 @@ public final class PlayerDataManager {
         }
         if (toSave.isEmpty()) return;
 
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            // 批量写失败时按重试上限重新标记脏，等待下轮 flush；成功则清除重试计数
-            if (upsertBatchSync(toSave)) {
-                for (PlayerData data : toSave) {
-                    flushFailures.remove(data.uuid());
-                }
-            } else {
-                for (PlayerData data : toSave) {
-                    int n = flushFailures.merge(data.uuid(), 1, Integer::sum);
-                    if (n < MAX_FLUSH_RETRY) {
-                        dirty.add(data.uuid());
-                    } else {
-                        flushFailures.remove(data.uuid()); // 放弃，停止重试
-                    }
+        // 批量写失败时按重试上限重新标记脏，等待下轮 flush；成功则清除重试计数
+        if (upsertBatchSync(toSave)) {
+            for (PlayerData data : toSave) {
+                flushFailures.remove(data.uuid());
+            }
+        } else {
+            for (PlayerData data : toSave) {
+                int n = flushFailures.merge(data.uuid(), 1, Integer::sum);
+                if (n < MAX_FLUSH_RETRY) {
+                    dirty.add(data.uuid());
+                } else {
+                    flushFailures.remove(data.uuid()); // 放弃，停止重试
                 }
             }
-        });
+        }
     }
 
     /** 同步全量保存，用于 onDisable（必须在关服前完成，覆盖全部内存数据含脏标记） */

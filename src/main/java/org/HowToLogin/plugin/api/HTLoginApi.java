@@ -117,6 +117,7 @@ public final class HTLoginApi {
 
     /**
      * 强制注册在线玩家并自动登录。
+     * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
      * @return 玩家已有账号时返回 false
      */
     public boolean forceRegister(@NotNull Player player, @NotNull String password) {
@@ -127,6 +128,7 @@ public final class HTLoginApi {
 
     /**
      * 强制注册玩家（不自动登录，适用于离线玩家）。
+     * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
      * @return 玩家已有账号时返回 false
      */
     public boolean forceRegister(@NotNull UUID uuid, @NotNull String password) {
@@ -176,6 +178,7 @@ public final class HTLoginApi {
 
     /**
      * 校验密码是否正确。
+     * bcrypt 校验同步阻塞（约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
      * @return 密码正确返回 true，玩家无账号或密码错误返回 false
      */
     public boolean checkPassword(@NotNull UUID uuid, @NotNull String password) {
@@ -187,6 +190,7 @@ public final class HTLoginApi {
     /**
      * 修改玩家密码（无需旧密码，管理员操作）。
      * 修改后 IP 免密登录失效，玩家下次需用新密码登录。
+     * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
      * @return 玩家无账号时返回 false
      */
     public boolean changePassword(@NotNull UUID uuid, @NotNull String newPassword) {

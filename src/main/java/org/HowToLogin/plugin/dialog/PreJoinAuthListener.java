@@ -16,6 +16,7 @@ import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.auth.PasswordValidator;
 import org.howtologin.plugin.config.ConfigManager;
 
+import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -88,9 +89,12 @@ public final class PreJoinAuthListener implements Listener {
     public void onConfigure(AsyncPlayerConnectionConfigureEvent event) {
         PlayerConfigurationConnection conn = event.getConnection();
         UUID uuid = conn.getProfile().getId();
-        // 清除上次连接可能残留的认证结果，避免本次连接误消费
+        // 清除上次连接可能残留的会话状态：认证结果与 2FA 待验证标记
+        // （pre-join 阶段断开无 PlayerQuitEvent → clearSession 不执行，残留的 pending2fa
+        //  会让下次连接的密码玩家凭旧会话状态直接 /2fa 跳过密码验证）
         if (uuid != null) {
             outcomes.remove(uuid);
+            authManager.clearPending2fa(uuid);
         }
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
         // 已登录（reconfigure 场景）直接放行
@@ -150,6 +154,11 @@ public final class PreJoinAuthListener implements Listener {
         return ip != null && authManager.checkIpAutoLogin(uuid, ip);
     }
 
+    // ViaVersion 反射惰性缓存：每个连接都会查询客户端协议版本，反射解析一次后复用
+    // ViaVersion 未在依赖中声明（加载顺序不保证），无法静态初始化，只能运行时反射
+    private static volatile Method viaGetPlayerVersion;
+    private static volatile Object viaApiInstance;
+
     /**
      * 客户端是否支持配置阶段 Dialog（协议 >= 1.21.6 / 771）。
      * 无 ViaVersion 时视为支持：能连上本插件的服务端版本必然 >= 1.21.6
@@ -162,10 +171,17 @@ public final class PreJoinAuthListener implements Listener {
             if (Bukkit.getPluginManager().getPlugin("ViaVersion") == null) {
                 return true;
             }
-            Class<?> viaApiClass = Class.forName("com.viaversion.viaversion.api.ViaAPI");
-            Class<?> viaClass = Class.forName("com.viaversion.viaversion.api.Via");
-            Object api = viaClass.getMethod("getAPI").invoke(null);
-            int version = (int) viaApiClass.getMethod("getPlayerVersion", UUID.class).invoke(api, playerId);
+            Method getPlayerVersion = viaGetPlayerVersion;
+            Object api = viaApiInstance;
+            if (getPlayerVersion == null || api == null) {
+                Class<?> viaApiClass = Class.forName("com.viaversion.viaversion.api.ViaAPI");
+                Class<?> viaClass = Class.forName("com.viaversion.viaversion.api.Via");
+                api = viaClass.getMethod("getAPI").invoke(null);
+                getPlayerVersion = viaApiClass.getMethod("getPlayerVersion", UUID.class);
+                viaApiInstance = api;
+                viaGetPlayerVersion = getPlayerVersion;
+            }
+            int version = (int) getPlayerVersion.invoke(api, playerId);
             return version >= 771;
         } catch (Exception e) {
             return true; // 查询失败保守放行（不阻塞正常玩家），回退到聊天栏在 onJoin 处理
@@ -290,17 +306,22 @@ public final class PreJoinAuthListener implements Listener {
                 return;
             }
             String ip = clientIp(session.connection);
-            if (authManager.registerConfig(uuid, password, ip)) {
-                session.registered = true;
-                session.success = true;
-                session.latch.countDown();
-            } else if (authManager.isIpAccountLimitReached(ip)) {
-                // 同 IP 注册数量已达上限：精确提示（连接层已拦已满 IP，此处兜底并发/延迟场景）
-                showRegister(session, uuid, locale, HTLogin.legacy(
-                        I18n.getForLocale("register.ip_limit", locale, plugin.getConfigManager().maxAccountsPerIp())));
-            } else {
-                showRegister(session, uuid, locale, DialogManager.text(locale, "register.failed"));
-            }
+            // bcrypt 哈希与建号落库耗时，移到异步线程（与 loginConfirm 的 loginConfigAsync 同模式）；
+            // 回调仅做线程安全操作：会话校验/重弹窗口/闭锁
+            Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+                if (sessions.get(uuid) != session) return;
+                if (authManager.registerConfig(uuid, password, ip)) {
+                    session.registered = true;
+                    session.success = true;
+                    session.latch.countDown();
+                } else if (authManager.isIpAccountLimitReached(ip)) {
+                    // 同 IP 注册数量已达上限：精确提示（连接层已拦已满 IP，此处兜底并发/延迟场景）
+                    showRegister(session, uuid, locale, HTLogin.legacy(
+                            I18n.getForLocale("register.ip_limit", locale, plugin.getConfigManager().maxAccountsPerIp())));
+                } else {
+                    showRegister(session, uuid, locale, DialogManager.text(locale, "register.failed"));
+                }
+            });
         };
     }
 

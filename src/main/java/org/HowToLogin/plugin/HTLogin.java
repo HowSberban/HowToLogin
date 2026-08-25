@@ -114,6 +114,8 @@ public final class HTLogin extends JavaPlugin {
         // Paper 1.20+ 统一调度器 API，兼容 Folia
         Bukkit.getGlobalRegionScheduler().cancelTasks(this);
         Bukkit.getAsyncScheduler().cancelTasks(this);
+        // 珍珠保管兜底写盘：关服批量退出触发的异步写可能刚被上方取消，此处同步确保落盘
+        if (pendingPearlManager != null) pendingPearlManager.shutdown();
         // PacketEvents 监听器由其自身管理生命周期，无需手动注销
         // 先输出日志再清理 I18n 静态状态，否则 shutdown 后 bundles 被清空会导致 get 返回 key 本身
         getLogger().info(I18n.get("plugin.disabled"));

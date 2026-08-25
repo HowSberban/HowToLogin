@@ -4,6 +4,7 @@ import org.howtologin.plugin.config.ConfigManager;
 import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -149,8 +150,8 @@ public final class DataService {
     /**
      * 强制缓存容量不超过配置的硬上限（premium.cache-cap）。
      * 攻击者可用不同 name+IP 组合高频触发标记并持续刷新，使过期清理永不到达，
-     * 导致 Map 无限增长。故超限时先清理已过期项，仍超限则逐出最早到期的活跃项。
-     * 仅在标记写入时调用，超限场景下 O(n)，正常路径零开销。
+     * 导致 Map 无限增长。故超限时先清理已过期项，仍超限则按到期时间升序逐出多余项
+     * （最早到期 = 最不必需保留）。仅在标记写入时调用，超限场景下 O(n log n)，正常路径零开销。
      */
     private void enforceCap(Map<String, Long> map) {
         int cap = configManager.premiumCacheCap();
@@ -158,16 +159,14 @@ public final class DataService {
         long now = System.currentTimeMillis();
         // 先清已过期项
         map.entrySet().removeIf(e -> e.getValue() <= now);
-        // 仍超限则不断逐出最早到期的项（最早到期 = 最不必需保留）
-        while (map.size() > cap) {
-            Map.Entry<String, Long> earliest = null;
-            for (Map.Entry<String, Long> e : map.entrySet()) {
-                if (earliest == null || e.getValue() < earliest.getValue()) {
-                    earliest = e;
-                }
+        // 仍超限：按到期时间排序，逐出最早到期的多余项
+        if (map.size() > cap) {
+            List<Map.Entry<String, Long>> byExpiry = map.entrySet().stream()
+                    .sorted(Map.Entry.comparingByValue())
+                    .toList();
+            for (int i = 0; i < byExpiry.size() - cap; i++) {
+                map.remove(byExpiry.get(i).getKey());
             }
-            if (earliest == null) break;
-            map.remove(earliest.getKey());
         }
     }
 

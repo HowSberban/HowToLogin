@@ -34,29 +34,29 @@ public final class UpgradeAccountCommand implements BasicCommand {
             return;
         }
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.must_login")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.must_login", player)));
             return;
         }
         if (authManager.isPremium(player)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.already_premium")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.already_premium", player)));
             return;
         }
         // 正版验证总开关或升级开关未开启时升级不可用
         if (!plugin.getConfigManager().premiumEnabled() || !plugin.getConfigManager().premiumUpgradeEnabled()) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.disabled")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.disabled", player)));
             return;
         }
 
         UUID offlineUuid = player.getUniqueId();
         if (!authManager.hasAccount(offlineUuid)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.no_account")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.no_account", player)));
             return;
         }
 
         if (authManager.markUpgradePending(offlineUuid)) {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.marked_success")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.marked_success", player)));
         } else {
-            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.already_marked")));
+            player.sendMessage(HTLogin.legacy(I18n.get("upgrade.already_marked", player)));
         }
     }
 }

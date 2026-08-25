@@ -73,12 +73,8 @@ public final class PendingPearlManager implements Listener {
     public void refresh() {
         if (plugin.getConfigManager().pearlEnabled()) return;
         pending.clear();
-        // 清空文件内容而非删除：保留文件占位，避免文件系统反复增删
-        try {
-            new YamlConfiguration().save(file);
-        } catch (Exception e) {
-            plugin.getLogger().severe(I18n.get("log.pearl_persist_failed", e.getMessage()));
-        }
+        // 写入空内容而非删除文件：保留文件占位，避免文件系统反复增删
+        saveSync();
     }
 
     // 退出：接管玩家飞行珍珠（快照+移除），防止留在世界上落地传送（纯 Folia 无核心保存，
@@ -142,8 +138,9 @@ public final class PendingPearlManager implements Listener {
         }
         List<PearlSnapshot> snapshots = pending.remove(player.getUniqueId());
         if (snapshots == null || snapshots.isEmpty()) return;
-        // 先清记录再发放：发放前崩溃宁可少还，不重复还
-        save();
+        // 先清记录再发放：发放前崩溃宁可少还，不重复还。
+        // 此处须同步写盘：异步写崩溃时会丢这次清记录，重启后旧记录读回导致重复返还
+        saveSync();
         if (!plugin.getConfigManager().pearlReturnEntity()) {
             giveItems(player, snapshots.size());
             return;
@@ -239,8 +236,15 @@ public final class PendingPearlManager implements Listener {
         }
     }
 
-    /** 将待返还记录写回 dat。synchronized：不同区域线程可能并发接管，串行化避免文件交错损坏 */
-    private synchronized void save() {
+    /** 记账路径写盘（退出/进入/传送拦截，区域线程高频调用）：异步执行避免阻塞区域线程。
+     *  返还路径的清记录须用 saveSync（崩溃语义），不走此处 */
+    private void save() {
+        // 全量写执行时刻的最新 pending，最终一致
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> saveSync());
+    }
+
+    /** 同步写盘（异步任务与 onDisable 兜底共用），串行化保证文件不交错 */
+    private synchronized void saveSync() {
         try {
             YamlConfiguration yaml = new YamlConfiguration();
             pending.forEach((uuid, snapshots) -> {
@@ -262,6 +266,11 @@ public final class PendingPearlManager implements Listener {
         } catch (Exception e) {
             plugin.getLogger().severe(I18n.get("log.pearl_persist_failed", e.getMessage()));
         }
+    }
+
+    /** 关服兜底：同步写盘一次。关服批量退出触发的异步写可能被 onDisable 的任务取消截断，此处确保落盘 */
+    public void shutdown() {
+        saveSync();
     }
 
     private static double asDouble(Object value) {

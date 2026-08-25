@@ -339,6 +339,11 @@ public final class AuthManager {
         pending2fa.add(uuid);
     }
 
+    /** 清除 2FA 待验证标记（会话级状态，不跨连接：新连接进入配置阶段时清残留，语义与 clearSession 一致） */
+    public void clearPending2fa(UUID uuid) {
+        pending2fa.remove(uuid);
+    }
+
     /** 是否为无密码账户（密码哈希为空，登录依赖验证码或正版验证） */
     public boolean isPasswordless(UUID uuid) {
         PlayerData data = dataManager.getPlayer(uuid);
