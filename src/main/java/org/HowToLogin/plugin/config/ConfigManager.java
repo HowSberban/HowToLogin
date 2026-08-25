@@ -341,13 +341,13 @@ public final class ConfigManager {
         this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", false);
 
         // 末影珍珠保管与返还方式
-        this.pearlEnabled = config.getBoolean("protection.pearl.enabled", true);
-        this.pearlReturnMode = config.getString("protection.pearl.return", "item");
+        this.pearlEnabled = config.getBoolean("pearl.enabled", true);
+        this.pearlReturnMode = config.getString("pearl.return", "item");
         // 返还方式校验：仅支持 item/entity，非法值回退为 item
         if (!"item".equals(this.pearlReturnMode) && !"entity".equals(this.pearlReturnMode)) {
-            plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "protection.pearl.return", this.pearlReturnMode, "item"));
+            plugin.getLogger().warning(I18n.get("log.config_mode_invalid", "pearl.return", this.pearlReturnMode, "item"));
             this.pearlReturnMode = "item";
-            config.set("protection.pearl.return", "item");
+            config.set("pearl.return", "item");
             configDirty = true;
         }
 

@@ -38,14 +38,17 @@ import java.util.concurrent.ConcurrentHashMap;
  *   Paper/Canvas 上与核心的保存并存（顺序不确定，由替换语义消解）
  * - onJoin：接管核心恢复的飞行珍珠，替换 pending 中同一批珍珠的旧快照
  * - returnPearls：返还前再吸收一次（封住核心迟到恢复的窗口），替换后返还
- * - onPearlTeleport：未登录玩家被珍珠传送时兜底拦截+按落点记账补偿
- *   （覆盖接管点漏掉的一切路径；取消传送不再损失珍珠——登录后返还）
+ * - onPearlTeleport：未登录玩家被珍珠传送时兜底拦截+按落点记账补偿。
+ *   正常时序下不会触发（未登录玩家投不出珍珠，飞行珍珠都被接管点捕获），
+ *   只覆盖接管机制自身的失效窗口：Folia 下读珍珠列表的并发修改漏读、
+ *   极端 lag 下核心恢复晚于 onJoin。防线全失效时这是最后一道闸——
+ *   不拦截即坐标保护被绕过。补偿记账仅记落点（珍珠已消耗，速度不可知）
  * 替换语义保证任何时序下只有一份权威副本：登录时世界上有珍珠 → 以实体为准；
  * 没有 → 以退出时的快照为准。任何情况下都不会双倍返还
- * 登录成功后按 protection.pearl.return 配置返还：
+ * 登录成功后按 pearl.return 配置返还：
  * item = 作为物品进入背包；entity = 在接管时的位置重新生成飞行珍珠（延续原轨迹）
  * 记录持久化到 pearls.dat（单服数据无协同需求，不占用数据库）
- * protection.pearl.enabled 关闭时所有入口均不工作（不接管/不返还），
+ * pearl.enabled 关闭时所有入口均不工作（不接管/不返还），
  * refresh()（启动与 reload）此时清空内存记录与 dat 文件内容
  * Folia：退出/进入事件在不同区域线程触发，集合均用并发容器，
  * 珍珠删除走实体调度器（珍珠可能位于其他区域），返还走玩家调度器（onLoginSuccess 内），
@@ -102,11 +105,11 @@ public final class PendingPearlManager implements Listener {
         save();
     }
 
-    // 未登录玩家被珍珠传送：兜底拦截 + 记账补偿
-    // 覆盖接管点漏掉的一切路径（核心迟到恢复的珍珠、Folia 弱一致漏读的珍珠等）：
-    // 未登录玩家丢不出珍珠，此处的 ENDER_PEARL 传送只可能来自漏网珍珠
-    // 拦截传送（防绕过），珍珠已消耗故按落点记账补偿（零速度），登录后与其他珍珠一并返还：
-    // entity 模式在落点重生即落地传送——珍珠完成它中断的旅程；item 模式按物品退款
+    // 未登录玩家被珍珠传送：兜底拦截（保险丝，正常时序不触发，见类注释）
+    // 只可能来自接管失效窗口漏网的珍珠；拦截传送防坐标保护被绕过。
+    // 珍珠已消耗，按落点记账补偿（速度不可知，记零速度），登录后与其他珍珠一并返还：
+    // entity 模式在落点重生静止珍珠，下坠撞地方块才触发传送（落点悬空时实际传送点略偏下）；
+    // item 模式按物品退款
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPearlTeleport(PlayerTeleportEvent event) {
         if (!plugin.getConfigManager().pearlEnabled()) return;
@@ -157,10 +160,23 @@ public final class PendingPearlManager implements Listener {
             }
             Location loc = new Location(world, snapshot.x(), snapshot.y(), snapshot.z());
             // 区域调度器：重生位置可能不在玩家所在区域，须在珍珠位置所属区域线程执行
-            Bukkit.getRegionScheduler().run(plugin, loc, task -> world.spawn(loc, EnderPearl.class, p -> {
-                p.setVelocity(new Vector(snapshot.vx(), snapshot.vy(), snapshot.vz()));
-                p.setShooter(player);
-            }));
+            Bukkit.getRegionScheduler().run(plugin, loc, task -> {
+                // 玩家在生成任务执行前退出：珍珠落地时 owner 离线会被销毁（Folia 直接不保存），
+                // 改记回 pending 待下次登录返还，防止珍珠凭空丢失
+                if (!player.isOnline()) {
+                    pending.merge(player.getUniqueId(), List.of(snapshot), (oldList, newList) -> {
+                        List<PearlSnapshot> merged = new ArrayList<>(oldList);
+                        merged.addAll(newList);
+                        return List.copyOf(merged);
+                    });
+                    saveSync();
+                    return;
+                }
+                world.spawn(loc, EnderPearl.class, p -> {
+                    p.setVelocity(new Vector(snapshot.vx(), snapshot.vy(), snapshot.vz()));
+                    p.setShooter(player);
+                });
+            });
         }
         if (fallbackItems > 0) giveItems(player, fallbackItems);
     }

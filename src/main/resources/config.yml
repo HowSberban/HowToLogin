@@ -152,11 +152,15 @@ protection:
   # 通过 PacketEvents 拦截物品数据包，防止恶意玩家窥视背包内容
   inventory:
     enabled: false
-  # 飞行末影珍珠保管：玩家退出时移除飞行中的珍珠并记录，防止重连未登录期间落地传送
-  pearl:
-    enabled: true
-    # 登录后返还方式：item = 作为物品进入背包；entity = 在退出时的位置重新生成飞行珍珠
-    return: item
+
+# 末影珍珠恢复
+# 玩家退出时移除飞行中的珍珠并记录，下次成功登录时返还
+pearl:
+  enabled: true
+  # 登录后返还方式
+  # item: 作为物品进入背包
+  # entity: 在退出时的位置重新生成飞行珍珠
+  return: item
 
 # 通用设置
 settings:
