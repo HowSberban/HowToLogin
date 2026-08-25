@@ -95,9 +95,8 @@ public final class DialogManager {
                                    Component error, DialogActionCallback onConfirm, DialogActionCallback onCancel) {
         List<DialogBody> body = new ArrayList<>();
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup.body")));
-        // 密钥行：前缀 + 金色密钥，突出可点击复制的提示
-        body.add(DialogBody.plainMessage(text(locale, "dialog.setup_secret_label")
-                .append(Component.text(secret).color(HIGHLIGHT_COLOR))));
+        // 密钥以金色突出显示（上文已说明用途，不再加"密钥："前缀）
+        body.add(DialogBody.plainMessage(Component.text(secret).color(HIGHLIGHT_COLOR)));
         body.add(DialogBody.plainMessage(text(locale, "dialog.setup_hint")));
         // 有限时配置时追加红色过期提醒
         int expireSeconds = plugin.getConfigManager().twoFactorTempSecretExpireSeconds();
