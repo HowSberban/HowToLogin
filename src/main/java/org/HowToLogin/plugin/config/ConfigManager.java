@@ -228,7 +228,7 @@ public final class ConfigManager {
         this.failProtectionEnabled = config.getBoolean("login.fail-protection.enabled", true);
         this.failMaxAttempts = clampInt("login.fail-protection.max-attempts", config.getInt("login.fail-protection.max-attempts", 3), 1);
         this.failKickDuration = clampInt("login.fail-protection.kick-duration", config.getInt("login.fail-protection.kick-duration", 60), 0);
-        this.failProtectionResetSeconds = clampInt("login.fail-protection.reset-seconds", config.getInt("login.fail-protection.reset-seconds", 300), 0);
+        this.failProtectionResetSeconds = clampInt("login.fail-protection.reset-seconds", config.getInt("login.fail-protection.reset-seconds", 300), 1);
         this.ipAutoLoginEnabled = config.getBoolean("login.ip-auto-login.enabled", true);
         this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 120), 0);
         this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
@@ -282,8 +282,8 @@ public final class ConfigManager {
             config.set("password.hash", "bcrypt");
             configDirty = true;
         }
-        // BCrypt work factor：钳制 4-31 有效范围，越界时回写配置文件
-        this.bcryptCost = clampRange("password.hash-cost", config.getInt("password.hash-cost", 12), 4, 31);
+        // BCrypt work factor：钳制 10-31 有效范围（低于 10 时离线爆破成本过低），越界时回写配置文件
+        this.bcryptCost = clampRange("password.hash-cost", config.getInt("password.hash-cost", 12), 10, 31);
         // 密码字符规则：正则表达式，为空表示不限制
         String patternStr = config.getString("password.pattern", "");
         if (patternStr.isBlank()) {

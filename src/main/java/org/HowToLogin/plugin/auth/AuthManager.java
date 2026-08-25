@@ -390,11 +390,8 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) {
-            // 验证失败：回到待验证状态，玩家可重试
-            // 无密码账户的验证码即唯一登录因素，失败计入暴力破解防护（与密码错误同待遇）
-            if (data.passwordHash() == null || data.passwordHash().isEmpty()) {
-                handleLoginFailure(uuid, player);
-            }
+            // 验证失败：回到待验证状态，玩家可重试；与密码错误同待遇计入暴力破解防护
+            handleLoginFailure(uuid, player);
             pending2fa.add(uuid);
             return false;
         }
@@ -408,10 +405,8 @@ public final class AuthManager {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) {
-            // 无密码账户的验证码即唯一登录因素，失败计入暴力破解防护（与密码错误同待遇）
-            if (data.passwordHash() == null || data.passwordHash().isEmpty()) {
-                handleLoginFailure(uuid, null);
-            }
+            // 与密码错误同待遇计入暴力破解防护（无密码账户的验证码即唯一登录因素，更须防护）
+            handleLoginFailure(uuid, null);
             pending2fa.add(uuid);
             return false;
         }
@@ -757,27 +752,27 @@ public final class AuthManager {
 
     /**
      * 在 PlayerQuitEvent 中调用：异步重试删除玩家 .dat 文件。
-     * PlayerQuitEvent 触发时服务器尚未保存 .dat，直接删除会被后续保存覆盖。
-     * 采用重试机制：初始延迟 500ms 后尝试删除，若文件仍存在则每 300ms 重试一次，
-     * 5 秒内持续尝试（约 15 次），确保服务器完成保存后能可靠删除。
+     * 玩家被踢出后服务器仍会将其数据保存到 .dat，早于保存完成的删除会被覆盖回写。
+     * 采用重试机制：首次延迟 1000ms（等保存完成）后尝试，文件仍存在则每 300ms 重试，
+     * 5 秒内持续尝试，确保服务器完成保存后能可靠删除。
      */
     public void tryDeletePlayerDataOnQuit(UUID uuid) {
         if (!pendingDatDelete.remove(uuid)) return;
         Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid));
     }
 
-    /** 重试删除玩家数据，5 秒内持续尝试（首次 500ms，后续每 300ms） */
+    /** 重试删除玩家数据，5 秒内持续尝试（首次 1000ms，后续每 300ms） */
     @SuppressWarnings("BusyWait")
     private void deletePlayerDataWithRetry(UUID uuid) {
         long elapsed = 0;
         while (true) {
             try {
-                Thread.sleep(elapsed == 0 ? 500 : 300);
+                Thread.sleep(elapsed == 0 ? 1000 : 300);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             }
-            elapsed += elapsed == 0 ? 500 : 300;
+            elapsed += elapsed == 0 ? 1000 : 300;
             if (deletePlayerData(uuid)) return;
             if (elapsed >= 5000) {
                 plugin.getLogger().warning(I18n.get("log.delete_player_data_failed", uuid));

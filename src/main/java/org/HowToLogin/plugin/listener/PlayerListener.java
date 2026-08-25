@@ -491,6 +491,15 @@ public final class PlayerListener implements Listener {
         }
     }
 
+    // 实体交互（右键实体：村民交易、上马、喂食等）：未登录玩家保持原游戏模式时可打开交易界面窥视
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onInteractEntity(PlayerInteractEntityEvent event) {
+        if (plugin.getConfigManager().preventWorldInteraction()
+                && !authManager.isLoggedIn(event.getPlayer())) {
+            event.setCancelled(true);
+        }
+    }
+
     // 禁止未登录的旁观玩家附身实体：附身后镜头跟随目标实体移动，可窥视他人位置（绕过坐标保护）。
     // Paper 1.21.11 已移除 PlayerSpectateEntityEvent，附身改由 cause=SPECTATE 的传送事件表达
     @EventHandler(priority = EventPriority.LOWEST)

@@ -253,7 +253,7 @@ public final class TwoFactorCommand {
             return Command.SINGLE_SUCCESS;
         }
         String code = StringArgumentType.getString(ctx, "code");
-        // 暴力破解踢出期内拒绝验证（无密码账户验证码错误达到阈值后进入踢出期）
+        // 暴力破解踢出期内拒绝验证（验证码错误与密码错误同待遇，达阈值即踢出）
         if (authManager.isKicked(player)) {
             player.sendMessage(HTLogin.legacy(I18n.get("2fa.kicked", player, authManager.getKickRemaining(player))));
             return Command.SINGLE_SUCCESS;
