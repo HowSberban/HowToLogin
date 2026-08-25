@@ -105,10 +105,10 @@ public final class PlayerListener implements Listener {
                 beginAuthFlow(player);
                 return;
             }
-            // 先检查 IP 是否一致（决定是否需要传送）
-            // IP 一致时 onSpawnLocation 已将出生点设为退出位置，无需传送
-            // IP 不一致时需传送到退出位置
-            boolean ipAutoLogin = authManager.checkIpAutoLogin(player);
+            // 先检查会话是否命中（决定是否需要传送）
+            // 命中时 onSpawnLocation 已将出生点设为退出位置，无需传送
+            // 未命中时需传送到退出位置
+            boolean sessionHit = authManager.hasSession(player);
             authManager.autoLogin(player);
             // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，登录收尾与传送延迟到 /2fa 验证完成
             boolean pending2fa = authManager.isPending2fa(player.getUniqueId());
@@ -118,15 +118,15 @@ public final class PlayerListener implements Listener {
             } else {
                 player.sendMessage(HTLogin.legacy(I18n.get("login.premium_auto_login", player)));
             }
-            if (!ipAutoLogin && !pending2fa) {
+            if (!sessionHit && !pending2fa) {
                 authManager.returnToLogoutLocation(player);
             }
             return;
         }
 
         if (authManager.hasAccount(player)) {
-            // 尝试 IP 免密登录：上次登录 IP 与当前一致时自动登录
-            if (authManager.checkIpAutoLogin(player)) {
+            // 会话命中：上次登录 IP 与当前一致且未过期，免输密码直接登录
+            if (authManager.hasSession(player)) {
                 authManager.autoLogin(player);
                 if (authManager.isPending2fa(player.getUniqueId())) {
                     // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，传送由 /2fa 验证完成流程处理
@@ -155,6 +155,16 @@ public final class PlayerListener implements Listener {
             authManager.addPendingLogin(player);
         }
         if (passwordless) {
+            String ip = player.getAddress() != null
+                    ? player.getAddress().getAddress().getHostAddress() : null;
+            if (!authManager.requires2faAtLogin(player.getUniqueId(), ip)) {
+                // 2FA 会话命中：免验证码直接登录（Dialog 未覆盖时的回退路径）
+                // 走到这里说明 login.session 未命中，出生点在保护位置，登录后须传送回退出位置
+                authManager.autoLogin(player);
+                player.sendMessage(HTLogin.legacy(I18n.get("login.success", player)));
+                authManager.returnToLogoutLocation(player);
+                return;
+            }
             authManager.addPending2fa(player.getUniqueId());
         }
         authManager.setSpectator(player);
@@ -267,7 +277,7 @@ public final class PlayerListener implements Listener {
 
     /**
      * 在 JoinGamePacket 发送前调整老玩家 spawn 位置。
-     * - IP 自动登录的玩家：直接在退出位置出生，避免后续传送。
+     * - 会话命中的玩家：直接在退出位置出生，避免后续传送。
      * - 启用坐标保护：强制主世界随机位置，防止坐标泄露（F3、小地图 mod 等）。
      * 新玩家不干预，保留原版出生机制。
      * 此事件在 configuration phase 触发（异步线程），玩家尚未真正加入世界。
@@ -283,9 +293,10 @@ public final class PlayerListener implements Listener {
         var clientAddr = conn.getClientAddress().getAddress();
         String ip = clientAddr != null ? clientAddr.getHostAddress() : null;
 
-        // IP 自动登录的玩家直接在退出位置出生，避免后续传送
-        // 登录需 2FA 的除外：验证完成前不放行到退出位置（/2fa 验证后再传送）
-        if (uuid != null && authManager.checkIpAutoLogin(uuid, ip) && !authManager.requires2faAtLogin(uuid)) {
+        // 会话命中（免输密码）的玩家直接在退出位置出生，避免后续传送
+        // 登录需 2FA 的除外：验证完成前不放行到退出位置（/2fa 验证后再传送）；
+        // 2FA 会话命中（同 IP 且未过期）视同已完成验证
+        if (uuid != null && authManager.hasSession(uuid, ip) && !authManager.requires2faAtLogin(uuid, ip)) {
             Location logoutLoc = authManager.getLogoutLocation(uuid);
             if (logoutLoc != null) {
                 event.setSpawnLocation(logoutLoc);
@@ -293,7 +304,7 @@ public final class PlayerListener implements Listener {
             }
         }
 
-        // Pre-join 已认证玩家：与 IP 免密登录一致，直接在退出位置出生，避免随机出生后再传送
+        // Pre-join 已认证玩家：与会话命中一致，直接在退出位置出生，避免随机出生后再传送
         PreJoinAuthListener preJoin = plugin.getPreJoinAuthListener();
         if (uuid != null && preJoin != null && preJoin.hasCompleted(uuid)) {
             Location logoutLoc = authManager.getLogoutLocation(uuid);

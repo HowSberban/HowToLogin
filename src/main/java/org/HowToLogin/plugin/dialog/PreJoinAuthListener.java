@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
  * Pre-join Dialog 登录（Paper 配置阶段事件，1.21.6+）：
  * 玩家进入世界前弹窗完成登录/注册，认证成功才放行，登录前不接收任何世界信息（坐标保护天然不需要）。
  * 流程：配置阶段事件 → 弹窗阻塞等待提交 → 认证成功记录结果 → 进入世界由 onJoin 消费结果收尾。
- * 回退聊天栏提示：Dialog 未启用 / 客户端&lt;1.21.6 / 正版或 IP 免密（未绑定 2FA）/ 已登录；超时按 kick-on-timeout 踢出或放行收尾。
+ * 回退聊天栏提示：Dialog 未启用 / 客户端&lt;1.21.6 / 正版或会话命中（未绑定 2FA）/ 已登录；超时按 kick-on-timeout 踢出或放行收尾。
  */
 @SuppressWarnings("UnstableApiUsage")
 public final class PreJoinAuthListener implements Listener {
@@ -101,9 +101,19 @@ public final class PreJoinAuthListener implements Listener {
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
         // 客户端是否支持配置阶段 Dialog（<1.21.6 收到 Show Dialog 包会断连，回退聊天栏提示）
         if (!supportsDialogs(uuid)) return;
-        // 免密登录（正版非回退/IP 一致）且登录无需 2FA：放行，由 onJoin 现有逻辑处理
-        boolean autoLogin = skipAutoLogin(uuid, conn);
-        if (autoLogin && !authManager.requires2faAtLogin(uuid)) return;
+        // 登录无需 2FA 验证码（未绑定/开关关闭/2FA 会话命中）时的免弹窗放行
+        String ip = clientIp(conn);
+        boolean autoLogin = skipAutoLogin(uuid, ip);
+        if (!authManager.requires2faAtLogin(uuid, ip)) {
+            // 免密（正版非回退/IP 会话命中）：放行，由 onJoin 现有免密分支收尾
+            if (autoLogin) return;
+            // 无密码账户 2FA 会话命中：记 outcome 走 finishPreJoinLogin 收尾
+            // （onJoin 无对应免密分支，出生点决策也依赖 hasCompleted 直接在退出位置出生）
+            if (authManager.isPasswordless(uuid)) {
+                outcomes.put(uuid, AuthOutcome.LOGIN);
+                return;
+            }
+        }
 
         Session session = new Session(conn);
         sessions.put(uuid, session);
@@ -147,11 +157,10 @@ public final class PreJoinAuthListener implements Listener {
         }
     }
 
-    /** 正版（非回退）或 IP 免密：免密登录路径（是否仍需 2FA 窗口由调用方按绑定状态决定） */
-    private boolean skipAutoLogin(UUID uuid, PlayerConfigurationConnection conn) {
+    /** 正版（非回退）或会话命中：免密登录路径（是否仍需 2FA 窗口由调用方按绑定状态决定） */
+    private boolean skipAutoLogin(UUID uuid, String ip) {
         if (authManager.isPremium(uuid) && !authManager.isPremiumFallback(uuid)) return true;
-        String ip = clientIp(conn);
-        return ip != null && authManager.checkIpAutoLogin(uuid, ip);
+        return ip != null && authManager.hasSession(uuid, ip);
     }
 
     // ViaVersion 反射惰性缓存：每个连接都会查询客户端协议版本，反射解析一次后复用
@@ -259,7 +268,7 @@ public final class PreJoinAuthListener implements Listener {
                 showLogin(session, uuid, locale, DialogManager.text(locale, "dialog.empty_password"));
                 return;
             }
-            authManager.loginConfigAsync(uuid, password, (result, kickSeconds) -> {
+            authManager.loginConfigAsync(uuid, password, clientIp(session.connection), (result, kickSeconds) -> {
                 if (sessions.get(uuid) != session) return;
                 switch (result) {
                     case SUCCESS -> {
@@ -353,7 +362,7 @@ public final class PreJoinAuthListener implements Listener {
                 show2fa(session, uuid, locale, DialogManager.text(locale, "dialog.empty_code"));
                 return;
             }
-            if (authManager.verify2faConfig(uuid, code)) {
+            if (authManager.verify2faConfig(uuid, code, clientIp(session.connection))) {
                 session.success = true;
                 session.latch.countDown();
             } else {

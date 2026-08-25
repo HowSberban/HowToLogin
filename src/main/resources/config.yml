@@ -53,11 +53,11 @@ login:
   # IP 变动提醒：登录 IP 与上次不同时提示玩家
   ip-change-notify:
     enabled: true
-  # IP 免密登录：上次登录 IP 与当前一致时自动登录
-  ip-auto-login:
+  # 会话保持：上次登录 IP 与当前一致且未过期时免输密码
+  session:
     enabled: true
-    # 失效时间（分钟），超过此时间后需重新输入密码
-    # 0 = 永不失效
+    # 失效时间（分钟），从上次登录起算，超过后需重新输入密码
+    # 至少为 1，会话不应永久有效
     expire-minutes: 120
   # 双因素认证（TOTP）
   2fa:
@@ -67,6 +67,12 @@ login:
     # 绑定时生成的临时密钥有效期（秒），超时后作废需重新 setup
     # 0 = 永不过期
     expire-seconds: 300
+    # 2fa 会话保持：验证码通过后短时间内同 IP 重连免验证码，适合崩溃重连场景
+    session:
+      enabled: false
+      # 会话有效期（分钟），从最后一次验证码通过起算，命中不续期，至少为 1
+      # 窗口内同 IP 重连不需要验证码，时长越长风险越高
+      expire-minutes: 5
     # 是否提供扫码网页入口
     # 开启后绑定页面会带一个网页二维码按钮，密钥会发给二维码服务，介意可关闭
     qr: true
@@ -77,7 +83,7 @@ login:
 # 注册设置
 register:
   # 注册超时时间（秒），0 = 不限制
-  timeout: 120
+  timeout: 180
   # 同一 IP 账号数量限制
   max-accounts-per-ip:
     # 同一 IP 最大账号数量，0 = 不限制

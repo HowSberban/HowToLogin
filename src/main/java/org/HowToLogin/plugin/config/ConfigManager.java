@@ -48,8 +48,9 @@ public final class ConfigManager {
     private int failKickDuration;
     // 失败计数跨连接保留的过期时间（秒）：玩家最后一次失败超过此时长未再失败则清空计数，0 = 永不过期
     private int failProtectionResetSeconds;
-    private boolean ipAutoLoginEnabled;
-    private int ipAutoLoginExpireMinutes;
+    // 会话保持：上次登录 IP 一致且未过期时免输密码
+    private boolean sessionEnabled;
+    private int sessionExpireMinutes;
     private int loginRemindInterval;
     // 提示消息发送方式：chat / title / actionbar / bossbar
     private String loginRemindMethod;
@@ -63,6 +64,10 @@ public final class ConfigManager {
     private boolean twoFactorEnabled;
     // 绑定时临时密钥的有效期（秒），0 = 永不过期
     private int twoFactorTempSecretExpireSeconds;
+    // 2FA 会话保持：验证码通过后同 IP 短时间内重连免验证码
+    private boolean twoFaSessionEnabled;
+    // 2FA 会话有效期（分钟），固定窗口，命中不续期
+    private int twoFaSessionExpireMinutes;
     // 是否提供扫码网页入口（关闭后不向二维码服务发送密钥）
     private boolean twoFactorQrEnabled;
     // 生成二维码的服务地址模板，{data} 占位符会被替换为 URL 编码后的 otpauth 资料
@@ -223,14 +228,14 @@ public final class ConfigManager {
 
         // 登录设置
         this.loginTimeout = clampInt("login.timeout", config.getInt("login.timeout", 120), 0);
-        this.registerTimeout = clampInt("register.timeout", config.getInt("register.timeout", 120), 0);
+        this.registerTimeout = clampInt("register.timeout", config.getInt("register.timeout", 180), 0);
         this.kickOnTimeout = config.getBoolean("login.kick-on-timeout", true);
         this.failProtectionEnabled = config.getBoolean("login.fail-protection.enabled", true);
         this.failMaxAttempts = clampInt("login.fail-protection.max-attempts", config.getInt("login.fail-protection.max-attempts", 3), 1);
         this.failKickDuration = clampInt("login.fail-protection.kick-duration", config.getInt("login.fail-protection.kick-duration", 60), 0);
         this.failProtectionResetSeconds = clampInt("login.fail-protection.reset-seconds", config.getInt("login.fail-protection.reset-seconds", 300), 1);
-        this.ipAutoLoginEnabled = config.getBoolean("login.ip-auto-login.enabled", true);
-        this.ipAutoLoginExpireMinutes = clampInt("login.ip-auto-login.expire-minutes", config.getInt("login.ip-auto-login.expire-minutes", 120), 0);
+        this.sessionEnabled = config.getBoolean("login.session.enabled", true);
+        this.sessionExpireMinutes = clampInt("login.session.expire-minutes", config.getInt("login.session.expire-minutes", 120), 1);
         this.loginRemindInterval = clampInt("login.remind-interval", config.getInt("login.remind-interval", 5), 0);
         this.loginRemindMethod = config.getString("login.remind-method", "chat").toLowerCase(Locale.ROOT);
         this.loginDialogEnabled = config.getBoolean("login.dialog.enabled", true);
@@ -247,6 +252,9 @@ public final class ConfigManager {
         this.twoFactorEnabled = config.getBoolean("login.2fa.enabled", true);
         this.twoFactorTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
                 config.getInt("login.2fa.expire-seconds", 300), 0);
+        this.twoFaSessionEnabled = config.getBoolean("login.2fa.session.enabled", false);
+        this.twoFaSessionExpireMinutes = clampInt("login.2fa.session.expire-minutes",
+                config.getInt("login.2fa.session.expire-minutes", 5), 1);
         this.twoFactorQrEnabled = config.getBoolean("login.2fa.qr", true);
         this.twoFactorQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
 
@@ -519,8 +527,8 @@ public final class ConfigManager {
     public int failMaxAttempts() { return failMaxAttempts; }
     public int failKickDuration() { return failKickDuration; }
     public int failProtectionResetSeconds() { return failProtectionResetSeconds; }
-    public boolean ipAutoLoginEnabled() { return ipAutoLoginEnabled; }
-    public int ipAutoLoginExpireMinutes() { return ipAutoLoginExpireMinutes; }
+    public boolean sessionEnabled() { return sessionEnabled; }
+    public int sessionExpireMinutes() { return sessionExpireMinutes; }
     public int loginRemindInterval() { return loginRemindInterval; }
     public String loginRemindMethod() { return loginRemindMethod; }
     public boolean loginDialogEnabled() { return loginDialogEnabled; }
@@ -528,6 +536,8 @@ public final class ConfigManager {
     public boolean ipChangeNotifyEnabled() { return ipChangeNotifyEnabled; }
     public boolean twoFactorEnabled() { return twoFactorEnabled; }
     public int twoFactorTempSecretExpireSeconds() { return twoFactorTempSecretExpireSeconds; }
+    public boolean twoFaSessionEnabled() { return twoFaSessionEnabled; }
+    public int twoFaSessionExpireMinutes() { return twoFaSessionExpireMinutes; }
     public boolean twoFactorQrEnabled() { return twoFactorQrEnabled; }
     public String twoFactorQrUrl() { return twoFactorQrUrl; }
 

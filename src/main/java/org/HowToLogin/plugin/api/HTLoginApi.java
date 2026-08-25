@@ -108,7 +108,7 @@ public final class HTLoginApi {
 
     /**
      * 强制登出玩家。
-     * 玩家在线时会被标记为待登录状态，IP 免密登录失效。
+     * 玩家在线时会被标记为待登录状态，登录会话失效。
      * @return 玩家未登录时返回 false
      */
     public boolean forceLogout(@NotNull UUID uuid) {
@@ -189,7 +189,7 @@ public final class HTLoginApi {
 
     /**
      * 修改玩家密码（无需旧密码，管理员操作）。
-     * 修改后 IP 免密登录失效，玩家下次需用新密码登录。
+     * 修改后登录会话失效，玩家下次需用新密码登录。
      * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
      * @return 玩家无账号时返回 false
      */
