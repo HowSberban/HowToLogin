@@ -15,6 +15,7 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
 import com.destroystokyo.paper.event.entity.EntityAddToWorldEvent;
+import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -35,9 +37,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * Canvas（Folia 分支）用核心层 pearls.dat 恢复了该机制，但恢复实体在 join 之后
  * 才生成且不注册进 getEnderPearls()，事件级接管看不见它
  * 三种服务端行为不同，故所有入口收敛到统一记账原语 absorb，不做平台检测：
- * - onQuit：玩家退出时接管其飞行珍珠（纯 Folia 上是唯一接管时机，
- *   Paper/Canvas 上与核心的保存并存——同区域时同步移除抢在核心保存之前，
- *   核心自然无珍珠可存，不产生恢复副本）
+ * - onQuit：玩家退出时接管其飞行珍珠（同区域时同步移除抢在核心保存之前，
+ *   核心 NBT 自然无珍珠可存，不产生恢复副本）
+ * - onEntityRemoveFromWorld：珍珠实体被移除时接管（owner 离线或在线未登录）。
+ *   Folia 上这是主接管路径——Folia 无核心保存，玩家断开后服务端销毁其飞行珍珠，
+ *   且珍珠飞远后 getEnderPearls 在 quit 事件时已读不到，退出接管失效；
+ *   记账用销毁瞬间的最终状态
  * - onEntityAddToWorld：实体级拦截（时机无关的主动防线）。核心恢复的珍珠一进
  *   世界即接管，不依赖事件时序与 getEnderPearls() 注册（Canvas 两者都不满足），
  *   也覆盖 Folia 区块重载的退出残留
@@ -58,6 +63,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * 记录持久化到 pearls.dat（单服数据无协同需求，不占用数据库）
  * pearl.enabled 关闭时所有入口均不工作（不接管/不返还），
  * refresh()（启动与 reload）此时清空内存记录与 dat 文件内容
+ * 已知限制（Folia 引擎缺陷，实测确认）：
+ * - 滞留珍珠（stasis 装置）退出后 Folia 不销毁也不保存，留在世界上——装置原生存活
+ *   可继续使用，本插件不接管不返还；但 owner 未登录期间被其他玩家触发的传送无法
+ *   拦截（Folia 不触发 PlayerTeleportEvent，Folia#490）
+ * - 滞留珍珠所在区块卸载时 Folia 静默删除珍珠（不发实体事件），无法感知与补偿
  * Folia：各事件在不同区域线程触发，集合均用并发容器，
  * 珍珠移除优先同区域同步执行，跨区域走实体调度器（实体添加事件内
  * 禁止直接移除，区块状态更新期间会被服务端拒绝），
@@ -73,6 +83,9 @@ public final class PendingPearlManager implements Listener {
     private final File file;
     // 待返还的珍珠快照（接管时写入，启动时从 dat 读入，列表不可变保证并发读安全）
     private final Map<UUID, List<PearlSnapshot>> pending = new ConcurrentHashMap<>();
+    // 已由本插件处理的珍珠实体（absorb 即标记）：removed 事件据此区分
+    // 本插件调度移除（跳过）与 Folia 退出销毁路径（记账接管）
+    private final Set<UUID> handledPearls = ConcurrentHashMap.newKeySet();
     // 快照匹配容差：核心 NBT 恢复的坐标/速度与退出快照同为双精度原值，容差仅防浮点噪声
     private static final double STATE_MATCH_EPSILON = 1e-6;
     // NMS ThrowableProjectile.getOwnerUUID() 反射缓存（核心 NBT 恢复路径的珍珠归属）
@@ -93,8 +106,8 @@ public final class PendingPearlManager implements Listener {
         saveSync();
     }
 
-    // 退出：接管玩家飞行珍珠，防止留在世界上落地传送（纯 Folia 无核心保存，
-    // 此处为唯一接管时机；Paper/Canvas 上同区域时同步移除抢在核心保存之前）
+    // 退出：接管玩家飞行珍珠，防止留在世界上落地传送
+    // Paper/Canvas 上同区域时同步移除抢在核心保存读列表之前（核心 NBT 自然无珍珠可存）
     @EventHandler(priority = EventPriority.MONITOR)
     public void onQuit(PlayerQuitEvent event) {
         if (!plugin.getConfigManager().pearlEnabled()) return;
@@ -105,6 +118,28 @@ public final class PendingPearlManager implements Listener {
             changed = true;
         }
         if (changed) save();
+    }
+
+    // 珍珠实体被移除：owner 未登录（离线或在线未登录）时接管记账。
+    // Folia 上这是主接管路径——Folia 无核心保存，玩家断开后服务端销毁其飞行珍珠，
+    // 且珍珠飞远后 getEnderPearls 在 quit 事件时已读不到，退出接管失效，
+    // 记账用销毁瞬间的最终状态；其他服务端上它兜住 CME 漏读与迟到恢复后消亡的珍珠。
+    // 在线未登录也接管：未登录期间消亡的珍珠（如 Canvas 迟到恢复后落地）先记账，
+    // 登录后返还，避免未登录玩家被珍珠传走
+    //（被本插件 removePearl 移除的珍珠由 handledPearls 标记区分，跳过防双计）
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onEntityRemoveFromWorld(EntityRemoveFromWorldEvent event) {
+        if (!(event.getEntity() instanceof EnderPearl pearl)) return;
+        if (!plugin.getConfigManager().pearlEnabled()) return;
+        // 本插件调度移除的珍珠：账已在 absorb 时记过，跳过
+        if (handledPearls.remove(pearl.getUniqueId())) return;
+        UUID owner = resolveOwner(pearl);
+        if (owner == null) return;
+        Player player = Bukkit.getPlayer(owner);
+        // 已登录玩家的珍珠移除属正常游戏（落地传送/撞墙消亡），不接管
+        if (player != null && plugin.getAuthManager().isLoggedIn(player)) return;
+        absorb(pearl, owner);
+        save();
     }
 
     // 实体级拦截（时机无关的主动防线，见类注释）：核心恢复的珍珠一进世界即接管，
@@ -255,12 +290,12 @@ public final class PendingPearlManager implements Listener {
     /** 读取玩家当前飞行珍珠的弱一致副本，失败按无珍珠处理 */
     // getEnderPearls() 标记为 @ApiStatus.Experimental，实际为 Paper 稳定提供的实体视图 API
     @SuppressWarnings("UnstableApiUsage")
-    private static List<EnderPearl> copyFlyingPearls(Player player) {
+    private List<EnderPearl> copyFlyingPearls(Player player) {
         try {
             return List.copyOf(player.getEnderPearls());
         } catch (Exception e) {
             // Folia 下珍珠在其他区域线程消亡会并发修改该列表（CME），按无珍珠处理；
-            // 漏读的珍珠由实体级拦截（区块重载时）与传送兜底拦截（仅 Paper）补偿
+            // 漏读的珍珠由实体级拦截（区块重载时）、removed 事件接管与传送兜底拦截（仅 Paper）补偿
             return List.of();
         }
     }
@@ -289,9 +324,13 @@ public final class PendingPearlManager implements Listener {
     /**
      * 移除珍珠：当前线程即珍珠所属区域时同步执行（退出接管抢在核心保存读列表之前，
      * 核心 NBT 自然无珍珠可存，重入不再产生恢复副本）；
-     * 跨区域或实体添加事件内（禁止直接移除，区块状态更新期间会被拒绝）走实体调度器
+     * 跨区域或实体添加事件内（禁止直接移除，区块状态更新期间会被拒绝）走实体调度器。
+     * 移除前标记 handledPearls：本插件的移除触发 removed 事件时据此跳过记账（防双计）；
+     * 已消亡实体（Folia 销毁路径接管时）不标记——不会再触发 removed，标记会泄漏
      */
     private void removePearl(EnderPearl pearl) {
+        if (!pearl.isValid()) return;
+        handledPearls.add(pearl.getUniqueId());
         if (Bukkit.isOwnedByCurrentRegion(pearl.getLocation())) {
             pearl.remove();
             return;
