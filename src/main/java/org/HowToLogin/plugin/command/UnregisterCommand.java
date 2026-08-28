@@ -8,7 +8,6 @@ import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
@@ -45,16 +44,16 @@ public final class UnregisterCommand {
         CommandSender sender = ctx.getSource().getSender();
         String targetName = StringArgumentType.getString(ctx, "player");
 
-        // 异步解析玩家：getOfflinePlayer 可能发起 Mojang API 请求（阻塞），不能在主线程调用
-        // 之前用 getOfflinePlayerIfCached 导致服务器重启后找不到未进服的玩家
+        // 异步执行：注销涉及数据库写操作与玩家数据文件删除，不该阻塞主线程
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            // 优先检查在线玩家（getOfflinePlayer 内部也会检查，但这里单独检查以便后续踢出）
+            // 优先使用在线玩家 UUID（在线玩家的 UUID 必与数据库账号一致，天然不受 usercache 污染）
             Player onlinePlayer = Bukkit.getPlayerExact(targetName);
-            // getOfflinePlayer 会依次检查：在线玩家 → 缓存 → playerdata 目录 → Mojang API
-            OfflinePlayer target = onlinePlayer != null ? onlinePlayer : Bukkit.getOfflinePlayer(targetName);
-            UUID targetUuid = target.getUniqueId();
+            UUID targetUuid = onlinePlayer != null
+                    ? onlinePlayer.getUniqueId()
+                    // 离线玩家按数据库记录解析：不用 getOfflinePlayer（usercache 可能同名缓存不同 UUID）
+                    : plugin.getPlayerDataManager().findUuidByName(targetName);
 
-            if (!authManager.unregister(targetUuid)) {
+            if (targetUuid == null || !authManager.unregister(targetUuid)) {
                 sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
                 return;
             }

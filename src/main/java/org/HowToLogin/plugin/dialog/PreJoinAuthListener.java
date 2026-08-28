@@ -314,11 +314,12 @@ public final class PreJoinAuthListener implements Listener {
                 return;
             }
             String ip = clientIp(session.connection);
+            String name = session.connection.getProfile().getName();
             // bcrypt 哈希与建号落库耗时，移到异步线程（与 loginConfirm 的 loginConfigAsync 同模式）；
             // 回调仅做线程安全操作：会话校验/重弹窗口/闭锁
             Bukkit.getAsyncScheduler().runNow(plugin, task -> {
                 if (sessions.get(uuid) != session) return;
-                if (authManager.registerConfig(uuid, password, ip)) {
+                if (authManager.registerConfig(uuid, name, password, ip)) {
                     session.registered = true;
                     session.success = true;
                     session.latch.countDown();

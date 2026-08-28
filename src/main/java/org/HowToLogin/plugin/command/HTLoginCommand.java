@@ -259,7 +259,7 @@ public final class HTLoginCommand {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
             AuthManager auth = plugin.getAuthManager();
-            if (!auth.forceRegister(target.getUniqueId(), password)) {
+            if (!auth.forceRegister(target.getUniqueId(), targetName, password)) {
                 sender.sendMessage(I18n.msg("htlogin.forceregister_already_exists", sender, targetName));
                 return;
             }

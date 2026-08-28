@@ -1,5 +1,6 @@
 package org.howtologin.plugin.api;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.howtologin.plugin.HTLogin;
@@ -118,10 +119,10 @@ public final class HTLoginApi {
     /**
      * 强制注册在线玩家并自动登录。
      * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
-     * @return 玩家已有账号时返回 false
+     * @return 玩家已有账号或同名账号（含正版）已存在时返回 false
      */
     public boolean forceRegister(@NotNull Player player, @NotNull String password) {
-        if (!authManager.forceRegister(player.getUniqueId(), password)) return false;
+        if (!authManager.forceRegister(player.getUniqueId(), player.getName(), password)) return false;
         authManager.forceLogin(player);
         return true;
     }
@@ -129,10 +130,11 @@ public final class HTLoginApi {
     /**
      * 强制注册玩家（不自动登录，适用于离线玩家）。
      * 含 bcrypt 哈希（同步阻塞，约数百毫秒），请在异步线程调用，勿在主线程/区域线程调用
-     * @return 玩家已有账号时返回 false
+     * @return 玩家已有账号或同名账号（含正版）已存在时返回 false
      */
     public boolean forceRegister(@NotNull UUID uuid, @NotNull String password) {
-        return authManager.forceRegister(uuid, password);
+        // UUID 反推名字：上过服务器的离线玩家有名字记录，从未上过则返回 null（跳过同名检查）
+        return authManager.forceRegister(uuid, Bukkit.getOfflinePlayer(uuid).getName(), password);
     }
 
     /**

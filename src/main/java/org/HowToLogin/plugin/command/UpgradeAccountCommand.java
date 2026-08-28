@@ -53,10 +53,11 @@ public final class UpgradeAccountCommand implements BasicCommand {
             return;
         }
 
-        if (authManager.markUpgradePending(offlineUuid)) {
+        // 重复执行即取消已提交的升级请求
+        if (authManager.toggleUpgrade(offlineUuid)) {
             player.sendMessage(I18n.msg("upgrade.marked_success", player));
         } else {
-            player.sendMessage(I18n.msg("upgrade.already_marked", player));
+            player.sendMessage(I18n.msg("upgrade.cancelled", player));
         }
     }
 }

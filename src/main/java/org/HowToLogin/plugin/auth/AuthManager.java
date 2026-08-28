@@ -76,6 +76,8 @@ public final class AuthManager {
     private final Map<UUID, Long> recentUnregister = new ConcurrentHashMap<>();
     // 待升级离线账号（离线 UUID）：玩家执行升级指令后标记，下次登录时尝试正版验证
     private final Set<UUID> pendingUpgrade = ConcurrentHashMap.newKeySet();
+    // 正版账号降级标记（内存，不持久化）：下次进入时迁移数据到离线 UUID
+    private final Set<UUID> pendingDowngrade = ConcurrentHashMap.newKeySet();
     // 正版验证失败回退进入的正版玩家（正版 UUID）：本次需密码登录，不自动免密
     private final Set<UUID> premiumFallback = ConcurrentHashMap.newKeySet();
     // 登录超时任务启动时间戳：用于判断超时任务是否为最新（重启时旧任务自动失效）
@@ -144,9 +146,9 @@ public final class AuthManager {
     }
 
     // Registration
-    /** 若账号不存在则创建（哈希+写库）。forceRegister/registerConfig 复用；ip 可为 null（记为 "unknown"） */
-    private boolean createAccount(UUID uuid, String password, String ip) {
-        if (dataManager.hasAccount(uuid)) {
+    /** 创建账号（哈希+写库），同名账号（含正版）已存在时拒绝，维持用户名全局唯一。forceRegister/registerConfig 复用；name 为 null 时仅按 UUID 查重；ip 可为 null（记为 "unknown"） */
+    private boolean createAccount(UUID uuid, String name, String password, String ip) {
+        if (dataManager.hasAccountByName(name) || dataManager.hasAccount(uuid)) {
             return false;
         }
         String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
@@ -168,7 +170,8 @@ public final class AuthManager {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
             player.getScheduler().run(plugin, task2 -> {
-                if (dataManager.hasAccount(uuid)) {
+                // 同名账号（含正版）已存在时拒绝；离线 UUID 由名推导，该判定同时覆盖账号已存在的并发竞态
+                if (dataManager.hasAccountByName(player.getName())) {
                     done.accept(false);
                     return;
                 }
@@ -185,23 +188,23 @@ public final class AuthManager {
 
     /**
      * 强制注册：管理员绕过 IP 限制强制为玩家创建账号。
-     * 已有账号时返回 false。玩家在线时记录其当前 IP，离线时记为 "unknown"（下次登录时更新）。
+     * 同名账号已存在时返回 false。玩家在线时记录其当前 IP，离线时记为 "unknown"（下次登录时更新）。
      * 不会自动登录，玩家需自行 /login。
      */
-    public boolean forceRegister(UUID uuid, String password) {
+    public boolean forceRegister(UUID uuid, String name, String password) {
         Player online = Bukkit.getPlayer(uuid);
         String ip = online != null ? clientIp(online) : null;
-        if (!createAccount(uuid, password, ip)) return false;
+        if (!createAccount(uuid, name, password, ip)) return false;
         fireEvent(new HTLoginRegisterEvent(uuid, online));
         return true;
     }
 
-    /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理。IP 已满时拒绝 */
-    public boolean registerConfig(UUID uuid, String password, String ip) {
+    /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理。IP 已满或同名账号已存在时拒绝 */
+    public boolean registerConfig(UUID uuid, String name, String password, String ip) {
         if (isIpAccountLimitReached(ip)) {
             return false;
         }
-        return createAccount(uuid, password, ip);
+        return createAccount(uuid, name, password, ip);
     }
 
     // Login
@@ -782,6 +785,7 @@ public final class AuthManager {
         invulnerablePending.remove(uuid);
         spectatorPending.remove(uuid);
         pendingUpgrade.remove(uuid);
+        pendingDowngrade.remove(uuid);
         premiumFallback.remove(uuid);
         clearLoginSession(uuid);
         clear2faSession(uuid);
@@ -1139,9 +1143,16 @@ public final class AuthManager {
 
     // ===== 离线账号升级为正版 =====
 
-    /** 标记离线账号待升级为正版：下次登录时尝试正版验证，成功则迁移，失败则回退 */
-    public boolean markUpgradePending(UUID offlineUuid) {
-        return pendingUpgrade.add(offlineUuid);
+    /**
+     * 切换升级标记：无标记则打上（返回 true），已有标记则取消（返回 false）。
+     * 重复执行 /upgrade 即取消已提交的升级请求
+     */
+    public boolean toggleUpgrade(UUID offlineUuid) {
+        if (!pendingUpgrade.add(offlineUuid)) {
+            pendingUpgrade.remove(offlineUuid);
+            return false;
+        }
+        return true;
     }
 
     /** 检查离线账号是否有升级标记 */
@@ -1152,6 +1163,37 @@ public final class AuthManager {
     /** 清除升级标记（验证成功或失败回退时调用） */
     public void clearUpgradePending(UUID offlineUuid) {
         pendingUpgrade.remove(offlineUuid);
+    }
+
+    // ===== 正版账号降级为离线 =====
+
+    /**
+     * 切换降级标记：无标记则打上（返回 true），已有标记则取消（返回 false）。
+     * 重复执行 /downgrade 即取消已提交的降级请求
+     */
+    public boolean toggleDowngrade(UUID premiumUuid) {
+        if (!pendingDowngrade.add(premiumUuid)) {
+            pendingDowngrade.remove(premiumUuid);
+            return false;
+        }
+        return true;
+    }
+
+    /** 检查正版账号是否有降级标记 */
+    public boolean hasPendingDowngrade(UUID premiumUuid) {
+        return pendingDowngrade.contains(premiumUuid);
+    }
+
+    /**
+     * 执行降级迁移（正版 UUID → 离线 UUID）：账号数据与原版玩家数据一并迁移，
+     * 此后以密码或 2FA 登录。正版记录不存在时跳过（注销竞态，标记已由注销清理）
+     */
+    public void executeDowngrade(UUID premiumUuid, UUID offlineUuid, String name) {
+        if (!dataManager.migrateToOffline(premiumUuid, offlineUuid)) return;
+        migratePlayerData(premiumUuid, offlineUuid);
+        pendingDowngrade.remove(premiumUuid);
+        premiumFallback.remove(premiumUuid);
+        plugin.getLogger().info(I18n.get("log.downgrade_migrated", name));
     }
 
     /** 标记正版玩家本次为正版验证失败回退进入（需密码登录） */

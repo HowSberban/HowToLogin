@@ -393,11 +393,81 @@ public final class PlayerDataManager {
         });
     }
 
+    /**
+     * 将正版账号迁移回离线账号（正版降级为离线）。
+     * 用离线 UUID 创建新记录，保留密码、2FA 密钥、退出位置等数据，premium=0，清除皮肤 properties。
+     * 异步落库：删除正版记录 + 写入离线记录。
+     * 同名离线账号不可能存在（正版记录存续期间 LoginStart 拦截同名离线连接），不做冲突检查。
+     * 正版记录不存在时返回 false（注销竞态）
+     */
+    public boolean migrateToOffline(UUID premiumUuid, UUID offlineUuid) {
+        PlayerData premium = players.remove(premiumUuid);
+        if (premium == null) return false;
+        if (premium.name() != null) {
+            premiumNameIndex.remove(premium.name().toLowerCase());
+        }
+        // 正版记录即将从数据库删除，脏标记不再有意义（防止残留）
+        dirty.remove(premiumUuid);
+        flushFailures.remove(premiumUuid);
+        PlayerData offline = new PlayerData(offlineUuid, null, premium.passwordHash(), premium.ip(),
+                premium.lastLogin(), premium.logoutLocation(), false, null, premium.gameMode(),
+                premium.totpSecret(), premium.lastActive());
+        players.put(offlineUuid, offline);
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            try (Connection conn = dataSource.getConnection()) {
+                // 删除正版记录与写入离线记录须在同一事务，避免中途崩溃导致两记录皆失（账号丢失）
+                conn.setAutoCommit(false);
+                try {
+                    try (PreparedStatement del = conn.prepareStatement(SQL_DELETE)) {
+                        del.setString(1, premiumUuid.toString());
+                        del.executeUpdate();
+                    }
+                    try (PreparedStatement ups = conn.prepareStatement(SQL_UPSERT)) {
+                        bindPlayerData(ups, offline);
+                        ups.executeUpdate();
+                    }
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe(I18n.get("log.migrate_failed", premiumUuid + ": " + e.getMessage()));
+            }
+        });
+        return true;
+    }
+
     /** 按玩家名查询（用于正版验证 LoginStart 阶段，仅返回 premium=1 的记录） */
     public PlayerData getByName(String name) {
         if (name == null) return null;
         UUID uuid = premiumNameIndex.get(name.toLowerCase());
         return uuid != null ? players.get(uuid) : null;
+    }
+
+    /**
+     * 按玩家名查找账号 UUID（正版按名索引，离线由名推导）
+     * 以数据库记录为准，避免 usercache 同名缓存到不同 UUID 造成误删
+     */
+    public UUID findUuidByName(String name) {
+        if (name == null) return null;
+        UUID uuid = premiumNameIndex.get(name.toLowerCase());
+        if (uuid != null) return uuid;
+        UUID offlineUuid = offlineUuidOf(name);
+        return players.containsKey(offlineUuid) ? offlineUuid : null;
+    }
+
+    /**
+     * 是否已有同名账号（含离线与正版）
+     * 正版账号记录名字，按名索引判定；离线账号不记名，但离线 UUID 由用户名确定推导，按推导 UUID 判定等价
+     */
+    public boolean hasAccountByName(String name) {
+        return findUuidByName(name) != null;
+    }
+
+    /** 原版离线模式 UUID 推导（与 DataService.offlineUuid 同式，数据层不依赖 premium 模块故内联定义） */
+    private static UUID offlineUuidOf(String name) {
+        return UUID.nameUUIDFromBytes(("OfflinePlayer:" + name).getBytes(StandardCharsets.UTF_8));
     }
 
     /** 是否为正版账号（premium=1） */

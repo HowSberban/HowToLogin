@@ -121,6 +121,14 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             upgradeAttempt = true;
         }
 
+        // 降级中：正版玩家已提交降级请求 → 迁移账号数据到离线 UUID 后放行，走服务端原生
+        // 离线登录（离线 UUID 进入，密码或 2FA 登录）。LoginStart 阶段即可算出离线 UUID，
+        // 此时迁移确保后续配置阶段认证读到离线账号
+        if (profile.exists() && profile.premium() && authManager.hasPendingDowngrade(profile.uuid())) {
+            authManager.executeDowngrade(profile.uuid(), DataService.offlineUuid(username), username);
+            return;
+        }
+
         // 3. 新玩家（不在数据库）：仅当正版验证与自动验证均开启时才拦截验证，否则按离线处理
         //    同时检查离线确认标记，避免离线客户端反复尝试正版验证
         //    已注册玩家（含 premium=1）不受离线标记影响，防止同名离线玩家抢占正版账号
