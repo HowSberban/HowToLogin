@@ -277,7 +277,7 @@ public final class ConfigManager {
             config.set("login.remind-method", "chat");
             configDirty = true;
         }
-        this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify.enabled", true);
+        this.ipChangeNotifyEnabled = config.getBoolean("login.ip-change-notify", false);
         // 双因素认证
         this.twoFaEnabled = config.getBoolean("login.2fa.enabled", true);
         this.twoFaTempSecretExpireSeconds = clampInt("login.2fa.expire-seconds",
@@ -381,10 +381,10 @@ public final class ConfigManager {
         this.protectionPosFixedPitch = (float) config.getDouble("protection.pos.fixed.pitch", 0);
 
         // 未登录旁观模式
-        this.protectionGamemodeEnabled = config.getBoolean("protection.gamemode.enabled", false);
+        this.protectionGamemodeEnabled = config.getBoolean("protection.gamemode", false);
 
         // 背包保护（PacketEvents 数据包拦截）
-        this.protectionInventoryEnabled = config.getBoolean("protection.inventory.enabled", false);
+        this.protectionInventoryEnabled = config.getBoolean("protection.inventory", false);
 
         // 末影珍珠保管与返还方式
         this.pearlEnabled = config.getBoolean("pearl.enabled", true);
@@ -441,7 +441,7 @@ public final class ConfigManager {
         this.premiumRetryIntervalMs = clampInt("premium.retry-interval-ms", config.getInt("premium.retry-interval-ms", 500), 0);
         this.premiumHttpPoolSize = clampRange("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2, 64);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
-        this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade.enabled", true);
+        this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade", true);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
         this.premiumFallbackCacheSeconds = clampInt("premium.fallback.cache-seconds", config.getInt("premium.fallback.cache-seconds", 300), 30);
     }

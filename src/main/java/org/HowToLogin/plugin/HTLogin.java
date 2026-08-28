@@ -154,19 +154,14 @@ public final class HTLogin extends JavaPlugin {
 
     /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包） */
     private void registerPacketListener() {
-        // 始终注册监听器，是否拦截由 InventoryPacketListener 按 protection.inventory.enabled 实时判断，
-        // 使配置热重载（/htlogin reload）能即时开关背包保护而不必重启
         PacketEvents.getAPI().getEventManager()
                 .registerListener(new InventoryPacketListener(authManager, configManager));
     }
 
     /**
      * 注册正版验证监听器。
-     * DataService/MojangClient/PlayerInjector 不依赖 PacketEvents，可直接实例化；
-     * ConnectionHandler 依赖 PacketEvents（硬依赖），直接实例化并注册。
      * 始终注册监听器；是否拦截正版玩家由 ConnectionHandler 按数据库 premium 标记实时判断
      * （premium=1 始终验证，配置文件 premium.enabled 只决定新玩家是否验证），
-     * 使配置热重载（/htlogin reload）能即时开关正版验证而不必重启。
      */
     private void registerPremiumListener() {
         DataService dataService = new DataService(playerDataManager, configManager);

@@ -18,6 +18,7 @@ database:
     # 连接池大小（有效范围 1-128）
     pool-size: 10
     # 连接参数（键值对，拼接到 JDBC URL）
+    # 数据库在远程主机上时建议开启加密以提高安全性
     params:
       useSSL: "false"
       useUnicode: "true"
@@ -51,8 +52,7 @@ login:
     # 启用需自担风险，服务端与客户端版本均须不低于 1.21.6
     allow-risky-versions: false
   # IP 变动提醒：登录 IP 与上次不同时提示玩家
-  ip-change-notify:
-    enabled: true
+  ip-change-notify: false
   # 会话保持：上次登录 IP 与当前一致且未过期时免输密码
   session:
     enabled: true
@@ -152,12 +152,10 @@ protection:
   # 未登录旁观模式：未登录期间切换为旁观，登录后恢复上次的游戏模式
   # 首次注册的玩家恢复为服务器默认模式（server.properties 的 level-default-gamemode）
   # 若坐标保护关闭且上次退出位置悬空，该玩家强制旁观，避免落地摔落伤害
-  gamemode:
-    enabled: false
+  gamemode: false
   # 背包保护：未登录玩家无法查看背包
   # 通过 PacketEvents 拦截物品数据包，防止恶意玩家窥视背包内容
-  inventory:
-    enabled: false
+  inventory: false
 
 # 末影珍珠恢复
 # 玩家退出时移除飞行中的珍珠并记录，下次成功登录时返还
@@ -217,10 +215,8 @@ premium:
   http-pool-size: 2
   # 离线确认 / 回退缓存上限，防止条目过多占用内存
   cache-cap: 1000
-  # 离线账号升级为正版
-  upgrade:
-    # 是否允许玩家从离线升级为正版
-    enabled: true
+  # 离线账号升级为正版：是否允许玩家从离线升级为正版
+  upgrade: true
   # 正版验证失败时的回退登录（仅对已注册正版玩家生效），不安全，不建议开启
   # 放行玩家并以已记录的正版 UUID 进入，走密码登录
   fallback:
