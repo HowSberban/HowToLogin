@@ -450,11 +450,6 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         }
     }
 
-    /** 经已加密通道发送 Disconnect 包（& 颜色代码字符串） */
-    private void sendDisconnect(User user, String message) {
-        sendDisconnect(user, HTLogin.legacy(message));
-    }
-
     /** 经已加密通道发送 Disconnect 包（直接发送 Component，保留其他插件设置的消息样式） */
     private void sendDisconnect(User user, net.kyori.adventure.text.Component message) {
         WrapperLoginServerDisconnect disconnect = new WrapperLoginServerDisconnect(message);
@@ -462,6 +457,8 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     }
 
     /** 踢出连接：发送 Disconnect 后延迟关闭 channel（恶意客户端可无视 Disconnect 保持连接），并清理会话 */
+    // EventLoop 为 channel 长生命周期资源，不应关闭；借用其调度延迟关闭任务
+    @SuppressWarnings("resource")
     private void kick(Channel channel, User user, net.kyori.adventure.text.Component message) {
         sendDisconnect(user, message);
         channel.eventLoop().schedule(() -> { channel.close(); }, 5, TimeUnit.SECONDS);

@@ -269,7 +269,11 @@ public final class PlayerDataManager {
         dirty.clear();
         dbWriteExecutor.shutdown();
         try {
-            dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS);
+            if (!dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                // 超时未排空（DB 严重卡顿）：丢弃剩余任务（旧快照晚于全量保存落库会回退数据），最终状态由全量保存覆盖
+                plugin.getLogger().severe(I18n.get("log.db_write_queue_timeout"));
+                dbWriteExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -668,7 +672,11 @@ public final class PlayerDataManager {
     public void close() {
         dbWriteExecutor.shutdown();
         try {
-            dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS);
+            if (!dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                // 超时未排空：丢弃剩余任务，防止关闭数据源后在途任务获取连接失败刷错误日志
+                plugin.getLogger().severe(I18n.get("log.db_write_queue_timeout"));
+                dbWriteExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
