@@ -10,8 +10,8 @@ import org.jetbrains.annotations.NotNull;
 
 /**
  * 移除密码，转为无密码账户：
- * 离线账户须已绑定双因素认证（验证码成为唯一登录因素）；
- * 正版账户以正版验证为身份凭证，未绑定 2FA 也可移除（验证失败时无回退登录，直接踢出）
+ * 离线账户须已绑定双因素认证，移除时输入验证码确认（验证码成为唯一登录因素）；
+ * 正版账户以正版验证为身份凭证，直接放行无需验证码（验证失败时无回退登录，直接踢出）
  */
 public final class RemovePasswordCommand implements BasicCommand {
 
@@ -47,8 +47,9 @@ public final class RemovePasswordCommand implements BasicCommand {
         }
 
         String code = args.length > 0 ? args[0] : null;
-        // 已绑定 2FA 时需输入验证码确认（移除后即为唯一登录因素）
-        if (bound2fa && (code == null || code.isEmpty())) {
+        // 仅离线账户已绑定 2FA 时需要验证码确认（验证码成为唯一登录因素）；正版玩家凭正版验证直接放行
+        boolean needCode = bound2fa && !authManager.isPremium(player);
+        if (needCode && (code == null || code.isEmpty())) {
             player.sendMessage(I18n.msg("removepassword.usage", player));
             return;
         }

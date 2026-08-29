@@ -457,14 +457,15 @@ public final class AuthManager {
 
     /**
      * 移除密码，转为无密码账户。
-     * 已绑定 2FA 时验证码作为确认凭据（移除后即为唯一登录因素）。
+     * 离线账户已绑定 2FA 时验证码作为确认凭据（移除后即为唯一登录因素）；正版账户凭正版验证放行。
      * @return true 移除成功；false 验证码错误或账号不存在
      */
     public boolean removePassword(Player player, String code) {
         UUID uuid = player.getUniqueId();
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
-        if (data.totpSecret() != null) {
+        // 离线账户移除密码前须验证 TOTP（验证码成为唯一登录因素）；正版账户凭正版验证放行，无需验证码
+        if (data.totpSecret() != null && !data.premium()) {
             if (code == null || code.isEmpty() || !Totp.verifyCode(data.totpSecret(), code)) return false;
         }
         dataManager.updatePassword(uuid, "");
@@ -758,7 +759,7 @@ public final class AuthManager {
     // Change password
     /**
      * 异步修改密码：旧密码校验与新密码哈希（bcrypt 耗时）在异步线程执行，结果回调回到玩家区域线程。
-     * 正版账户密码可能为历史随机占位（玩家未知），跳过旧密码校验，直接设置新密码
+     * 正版与离线同规则，均须先验证旧密码（无密码账户不进入此路径，命令层拦截并引导 /addpassword）
      */
     public void changePasswordAsync(Player player, String oldPassword, String newPassword, Consumer<Boolean> done) {
         UUID uuid = player.getUniqueId();
@@ -768,7 +769,7 @@ public final class AuthManager {
             return;
         }
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            if (!data.premium() && !PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
+            if (!PasswordHash.checkPassword(oldPassword, data.passwordHash())) {
                 player.getScheduler().run(plugin, task2 -> done.accept(false), null);
                 return;
             }
