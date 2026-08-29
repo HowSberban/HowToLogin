@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * HTLogin 插件 API 入口。
@@ -59,6 +60,12 @@ public final class HTLoginApi {
     private static final Map<UUID, long[]> RATE_LIMITER = new ConcurrentHashMap<>();
     // 每个 UUID 每秒最多 10 次变更操作（bcrypt/DB 均为较重操作，防外部插件循环调用）
     private static final int RATE_LIMIT_PER_SECOND = 10;
+    // 触发清理的容量阈值：正常使用条目数=在线玩家数，远低于此；仅异常膨胀（随机 UUID 洪水）时清扫
+    private static final int RATE_LIMITER_EVICT_THRESHOLD = 4096;
+    // 限流槽空闲超时（毫秒）：超过即视为废弃，清理时移除
+    private static final long RATE_LIMITER_IDLE_MS = 2 * 60 * 1000L;
+    // 清理进行中标记：防止并发触发重复清扫
+    private static final AtomicBoolean RATE_LIMITER_EVICTING = new AtomicBoolean();
 
     /**
      * 变更操作限流：每 UUID 每秒最多 {@value RATE_LIMIT_PER_SECOND} 次，超限拒绝并返回 false。
@@ -69,6 +76,15 @@ public final class HTLoginApi {
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     private static boolean tryAcquire(UUID uuid) {
         long now = System.currentTimeMillis();
+        // 懒触发清理：仅当表膨胀到阈值才清扫空闲槽，常态下零额外开销（无周期任务空转）
+        if (RATE_LIMITER.size() >= RATE_LIMITER_EVICT_THRESHOLD
+                && RATE_LIMITER_EVICTING.compareAndSet(false, true)) {
+            try {
+                sweepRateLimiter();
+            } finally {
+                RATE_LIMITER_EVICTING.set(false);
+            }
+        }
         long[] slot = RATE_LIMITER.computeIfAbsent(uuid, k -> new long[2]);
         synchronized (slot) {
             if (now - slot[0] >= 1000L) {
@@ -78,6 +94,21 @@ public final class HTLoginApi {
             }
             return ++slot[1] <= RATE_LIMIT_PER_SECOND;
         }
+    }
+
+    /**
+     * 清理限流槽：移除空闲超过 2 分钟的条目，防止外部插件用随机 UUID 洪水导致表无界增长。
+     * 仅在表膨胀到阈值时触发（懒清理，不做周期任务）；被移除的 UUID 再次调用时按新窗口重建槽，
+     * 配额语义与全新调用者一致，限流目的不受影响（活跃的循环调用者从未空闲，不会被移除）
+     */
+    private static void sweepRateLimiter() {
+        long now = System.currentTimeMillis();
+        RATE_LIMITER.entrySet().removeIf(e -> {
+            long[] slot = e.getValue();
+            synchronized (slot) {
+                return now - slot[0] >= RATE_LIMITER_IDLE_MS;
+            }
+        });
     }
 
     /**

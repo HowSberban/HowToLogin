@@ -114,7 +114,12 @@ public final class PlayerInjector {
                 plugin.getLogger().warning(I18n.get("log.premium_prelogin_failed", name, e.getMessage()));
                 return HTLogin.legacy(I18n.get("listener.premium_unavailable"));
             }
-        }, preLoginExecutor);
+        }, preLoginExecutor).exceptionally(t -> {
+            // Error（类加载失败等）不经 Exception 分支，future 会以异常完成，消费端 thenAccept 静默跳过导致会话滞留
+            // 兜底返回通用踢出理由（fail-closed），保证调用方总能收到可处理结果
+            plugin.getLogger().severe(I18n.get("log.premium_prelogin_failed", name, t.toString()));
+            return HTLogin.legacy(I18n.get("listener.premium_unavailable"));
+        });
     }
 
     /**

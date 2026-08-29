@@ -808,6 +808,8 @@ public final class AuthManager {
         pendingLogin.remove(uuid);
         pending2fa.remove(uuid);
         clearPending2faSecret(uuid);
+        // 防重放计数一并清理：残留计数会误拒重绑定新密钥后的正确验证码（counter 单调消费）
+        used2faCounters.remove(uuid);
         failedAttempts.remove(uuid);
         kickUntil.remove(uuid);
         invulnerablePending.remove(uuid);

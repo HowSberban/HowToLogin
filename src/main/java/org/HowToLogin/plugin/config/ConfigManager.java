@@ -351,12 +351,12 @@ public final class ConfigManager {
         this.preventLook = config.getBoolean("prevent.look", true);
         this.preventChat = config.getBoolean("prevent.chat", true);
         this.preventCommand = config.getBoolean("prevent.command.enabled", true);
-        // 命令白名单统一转小写，匹配时大小写不敏感
+        // 命令白名单统一转小写，匹配时大小写不敏感（固定 Locale.ROOT：突等区域设置下无点 i 变形会导致条目失配）
         this.commandWhitelist = config.getStringList("prevent.command.whitelist")
                 .stream()
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
-                .map(String::toLowerCase)
+                .map(s -> s.toLowerCase(Locale.ROOT))
                 .toList();
         this.preventWorldInteraction = config.getBoolean("prevent.world-interaction", true);
         this.preventInventory = config.getBoolean("prevent.inventory", true);

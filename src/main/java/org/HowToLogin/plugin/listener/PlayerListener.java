@@ -10,6 +10,7 @@ import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -479,10 +480,18 @@ public final class PlayerListener implements Listener {
             }
         }
         // 未登录玩家不可伤害任何实体（左键攻击不经过交互事件，须拦攻击者一侧）
-        if (event instanceof org.bukkit.event.entity.EntityDamageByEntityEvent byEntity
-                && byEntity.getDamager() instanceof Player damager
-                && !authManager.isLoggedIn(damager)) {
-            event.setCancelled(true);
+        if (event instanceof org.bukkit.event.entity.EntityDamageByEntityEvent byEntity) {
+            // 直接近战：damager 为玩家，拦未登录者
+            if (byEntity.getDamager() instanceof Player damager && !authManager.isLoggedIn(damager)) {
+                event.setCancelled(true);
+                return;
+            }
+            // 投射物：damager 为投射物实体，归因到射击者（箭离弦后射击者注销时仍可命中）
+            if (byEntity.getDamager() instanceof Projectile projectile
+                    && projectile.getShooter() instanceof Player shooter
+                    && !authManager.isLoggedIn(shooter)) {
+                event.setCancelled(true);
+            }
         }
     }
 
