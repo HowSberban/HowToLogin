@@ -868,6 +868,16 @@ public final class AuthManager {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid));
     }
 
+    /**
+     * 异步删除玩家原版数据（player.dat、advancements、stats），复用 unregister 的重试删除逻辑。
+     * 账号合并作废场景使用：离线号记录删除后，遗留文件会被同名新注册玩家继承，必须一并清理。
+     * 遵循 settings.real-unreg 配置；可在网络线程调用（内部异步调度，不阻塞调用线程）。
+     */
+    public void deletePlayerDataAsync(UUID uuid) {
+        if (!configManager.realUnreg()) return;
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> deletePlayerDataWithRetry(uuid));
+    }
+
     /** 重试删除玩家数据，5 秒内持续尝试（首次 1000ms，后续每 300ms） */
     @SuppressWarnings("BusyWait")
     private void deletePlayerDataWithRetry(UUID uuid) {

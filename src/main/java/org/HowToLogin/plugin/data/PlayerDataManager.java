@@ -478,10 +478,22 @@ public final class PlayerDataManager {
      * 将离线账号迁移到正版账号（离线账号升级为正版）。
      * 用正版 UUID 创建新记录，保留退出位置等数据，密码置空（正版默认无密码），premium=1。
      * 异步落库：删除离线账号 + 写入正版账号。
+     * 目标正版 UUID 已有正版记录时（改名玩家意外注册同名离线号后升级等场景）：
+     * 保留原正版记录的全部玩家数据（密码/2FA/退出位置/游戏模式，原版 dat/成就/统计也不迁移），
+     * 仅更新名字与皮肤，离线号记录作废删除。
+     *
+     * @return true 常规迁移完成，调用方应随迁原版玩家数据文件；false 未迁移（离线号不存在或已保留原正版记录），调用方应跳过原版数据迁移
      */
-    public void migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String properties) {
-        PlayerData offline = players.remove(offlineUuid);
-        if (offline == null) return;
+    public boolean migrateToPremium(UUID offlineUuid, UUID premiumUuid, String name, String ip, String properties) {
+        PlayerData offline = players.get(offlineUuid);
+        if (offline == null) return false;
+        // 目标已有正版记录：保留原账号数据，仅换绑名字与皮肤，离线号作废（返回 false 让调用方跳过原版数据迁移）
+        PlayerData existing = players.get(premiumUuid);
+        if (existing != null && existing.premium()) {
+            preserveExistingPremium(offline, offlineUuid, premiumUuid, existing, name, properties);
+            return false;
+        }
+        players.remove(offlineUuid);
         if (offline.name() != null) {
             premiumNameIndex.remove(offline.name().toLowerCase());
         }
@@ -506,6 +518,57 @@ public final class PlayerDataManager {
                     }
                     try (PreparedStatement ups = conn.prepareStatement(SQL_UPSERT)) {
                         bindPlayerData(ups, premium);
+                        ups.executeUpdate();
+                    }
+                    conn.commit();
+                } catch (SQLException e) {
+                    conn.rollback();
+                    throw e;
+                }
+            } catch (SQLException e) {
+                plugin.getLogger().severe(I18n.get("log.migrate_failed", offlineUuid + ": " + e.getMessage()));
+            }
+        });
+        return true;
+    }
+
+    /**
+     * 目标正版 UUID 已有正版记录时的保留式合并：原正版记录的密码/2FA/退出位置/游戏模式原样保留，
+     * 仅更新名字与皮肤（玩家刚完成新名的正版验证）；离线号记录删除作废。
+     * 原版玩家数据（dat/成就/统计）不迁移，避免以离线号文件覆盖正版身份下的真实数据。
+     */
+    private void preserveExistingPremium(PlayerData offline, UUID offlineUuid, UUID premiumUuid,
+                                         PlayerData premium, String name, String properties) {
+        players.remove(offlineUuid);
+        if (offline.name() != null) {
+            premiumNameIndex.remove(offline.name().toLowerCase());
+        }
+        // 离线记录即将从数据库删除，脏标记不再有意义（防止残留）
+        dirty.remove(offlineUuid);
+        flushFailures.remove(offlineUuid);
+        if (premium.name() != null) {
+            premiumNameIndex.remove(premium.name().toLowerCase());
+        }
+        premium.properties(properties);
+        premium.name(name);
+        premiumNameIndex.put(name.toLowerCase(), premiumUuid);
+        plugin.getLogger().info(I18n.get("log.premium_migrate_preserved", name + " (" + offlineUuid + ")"));
+        // 作废离线号的原版数据文件一并删除（否则同名新玩家注册会继承遗留的背包/成就/统计）
+        plugin.getAuthManager().deletePlayerDataAsync(offlineUuid);
+        submitDbWrite(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+                try {
+                    try (PreparedStatement del = conn.prepareStatement(SQL_DELETE)) {
+                        del.setString(1, offlineUuid.toString());
+                        del.executeUpdate();
+                    }
+                    // 仅更新 premium/properties/name：密码/2FA/退出位置等以原正版记录为准
+                    try (PreparedStatement ups = conn.prepareStatement(SQL_UPDATE_PREMIUM)) {
+                        ups.setBoolean(1, true);
+                        ups.setString(2, properties);
+                        ups.setString(3, name);
+                        ups.setString(4, premiumUuid.toString());
                         ups.executeUpdate();
                     }
                     conn.commit();
