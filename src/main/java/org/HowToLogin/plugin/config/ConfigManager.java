@@ -72,6 +72,8 @@ public final class ConfigManager {
     private boolean twoFaQrEnabled;
     // 生成二维码的服务地址模板，{data} 占位符会被替换为 URL 编码后的 otpauth 资料
     private String twoFaQrUrl;
+    // otpauth 标签的服务器名（issuer）：非空时条目显示为 "服务器名:玩家名"，玩家名作账户详情
+    private String twoFaServerName;
 
     // 密码规则
     private int minPasswordLength;
@@ -146,6 +148,8 @@ public final class ConfigManager {
     private int premiumCacheCap;
     // 离线账号升级为正版
     private boolean premiumUpgradeEnabled;
+    // 正版账号降级为离线
+    private boolean premiumDowngradeEnabled;
     // 正版验证失败时允许正版玩家以密码登录（默认关闭，不安全）
     private boolean premiumPasswordFallbackEnabled;
     // 回退标记有效期（秒），过期后重连重新尝试正版验证
@@ -287,6 +291,7 @@ public final class ConfigManager {
                 config.getInt("login.2fa.session.expire-minutes", 5), 1);
         this.twoFaQrEnabled = config.getBoolean("login.2fa.qr", true);
         this.twoFaQrUrl = config.getString("login.2fa.qr-url", DEFAULT_QR_URL);
+        this.twoFaServerName = config.getString("login.2fa.server-name", "");
     }
 
     // 密码规则
@@ -442,6 +447,7 @@ public final class ConfigManager {
         this.premiumHttpPoolSize = clampRange("premium.http-pool-size", config.getInt("premium.http-pool-size", 2), 2, 64);
         this.premiumCacheCap = clampInt("premium.cache-cap", config.getInt("premium.cache-cap", 1000), 0);
         this.premiumUpgradeEnabled = config.getBoolean("premium.upgrade", true);
+        this.premiumDowngradeEnabled = config.getBoolean("premium.downgrade", true);
         this.premiumPasswordFallbackEnabled = config.getBoolean("premium.fallback.enabled", false);
         this.premiumFallbackCacheSeconds = clampInt("premium.fallback.cache-seconds", config.getInt("premium.fallback.cache-seconds", 300), 30);
     }
@@ -564,6 +570,7 @@ public final class ConfigManager {
     public int twoFaSessionExpireMinutes() { return twoFaSessionExpireMinutes; }
     public boolean twoFaQrEnabled() { return twoFaQrEnabled; }
     public String twoFaQrUrl() { return twoFaQrUrl; }
+    public String twoFaServerName() { return twoFaServerName == null ? "" : twoFaServerName.trim(); }
 
     // 密码规则
     public int minPasswordLength() { return minPasswordLength; }
@@ -635,6 +642,7 @@ public final class ConfigManager {
     public int premiumHttpPoolSize() { return premiumHttpPoolSize; }
     public int premiumCacheCap() { return premiumCacheCap; }
     public boolean premiumUpgradeEnabled() { return premiumUpgradeEnabled; }
+    public boolean premiumDowngradeEnabled() { return premiumDowngradeEnabled; }
     public boolean premiumPasswordFallbackEnabled() { return premiumPasswordFallbackEnabled; }
     public int premiumFallbackCacheSeconds() { return premiumFallbackCacheSeconds; }
 

@@ -2,6 +2,7 @@ package org.howtologin.plugin.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
+import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
 import org.bukkit.command.CommandSender;
@@ -17,9 +18,11 @@ import java.util.UUID;
  */
 public final class DowngradeAccountCommand implements BasicCommand {
 
+    private final HTLogin plugin;
     private final AuthManager authManager;
 
-    public DowngradeAccountCommand(AuthManager authManager) {
+    public DowngradeAccountCommand(HTLogin plugin, AuthManager authManager) {
+        this.plugin = plugin;
         this.authManager = authManager;
     }
 
@@ -36,6 +39,11 @@ public final class DowngradeAccountCommand implements BasicCommand {
         }
         if (!authManager.isPremium(player)) {
             player.sendMessage(I18n.msg("downgrade.not_premium", player));
+            return;
+        }
+        // 正版验证总开关或降级开关未开启时降级不可用
+        if (!plugin.getConfigManager().premiumEnabled() || !plugin.getConfigManager().premiumDowngradeEnabled()) {
+            player.sendMessage(I18n.msg("downgrade.disabled", player));
             return;
         }
         UUID premiumUuid = player.getUniqueId();

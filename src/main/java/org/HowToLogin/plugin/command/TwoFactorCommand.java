@@ -172,8 +172,13 @@ public final class TwoFactorCommand {
         if (!plugin.getConfigManager().twoFaQrEnabled()) return null;
         String template = plugin.getConfigManager().twoFaQrUrl();
         if (template == null || !template.contains("{data}")) return null;
-        // otpauth 资料：账号 + 密钥，拼好后整体编码一次（与 AuthMe 一致），交给二维码服务生成图片
-        String data = "otpauth://totp/" + player.getName() + "?secret=" + secret;
+        // otpauth 资料：issuer（服务器名，可空）+ 账户名（玩家名）+ 密钥，拼好后整体编码一次（与 AuthMe 一致）
+        // label 用 "服务器名:玩家名" 并带 issuer 参数：验证器条目标题指向服务器，玩家名作账户详情
+        String issuer = plugin.getConfigManager().twoFaServerName();
+        String data = "otpauth://totp/"
+                + (issuer.isEmpty() ? "" : issuer + ":")
+                + player.getName() + "?secret=" + secret
+                + (issuer.isEmpty() ? "" : "&issuer=" + issuer);
         String encoded = URLEncoder.encode(data, StandardCharsets.UTF_8).replace("+", "%20");
         return template.replace("{data}", encoded);
     }

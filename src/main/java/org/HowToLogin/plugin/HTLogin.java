@@ -144,7 +144,7 @@ public final class HTLogin extends JavaPlugin {
             commands.register("removepassword", "移除密码（无密码账户）", List.of("removepw", "rmpw"), new RemovePasswordCommand(authManager));
             commands.register("logout", "退出登录", List.of(), new LogoutCommand(authManager));
             commands.register("upgrade", "将离线账号升级为正版账号", List.of(), new UpgradeAccountCommand(this, authManager));
-            commands.register("downgrade", "将正版账号降级为离线账号", List.of(), new DowngradeAccountCommand(authManager));
+            commands.register("downgrade", "将正版账号降级为离线账号", List.of(), new DowngradeAccountCommand(this, authManager));
             commands.register(new UnregisterCommand(this, authManager).buildNode(), "删除账号（管理员）", List.of());
             commands.register(new PremiumCommand(this, authManager).buildNode(), "强制切换账号正版状态（管理员）", List.of());
             // 2fa 与 htlogin 一样使用 brigadier 原生注册，子命令作为 literal 节点，

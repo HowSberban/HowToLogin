@@ -79,6 +79,9 @@ login:
     # 生成二维码的服务地址模板，{data} 会被替换为 URL 编码后的 otpauth 资料
     # 该地址会发给玩家在浏览器打开以扫码绑定，可换成其它支持该参数的服务
     qr-url: "https://api.qrserver.com/v1/create-qr-code/?data={data}&size=200x200&ecc=M&margin=10"
+    # 验证器账户标签的服务器名（otpauth issuer）
+    # 填写后条目显示为 "服务器名:玩家名"，玩家名作账户详情；留空则仅显示玩家名，不影响绑定
+    server-name: ""
 
 # 注册设置
 register:
@@ -217,6 +220,8 @@ premium:
   cache-cap: 1000
   # 离线账号升级为正版：是否允许玩家从离线升级为正版
   upgrade: true
+  # 正版账号降级为离线：是否允许玩家从正版降级为离线
+  downgrade: true
   # 正版验证失败时的回退登录（仅对已注册正版玩家生效），不安全，不建议开启
   # 放行玩家并以已记录的正版 UUID 进入，走密码登录
   # 开启后风险：
