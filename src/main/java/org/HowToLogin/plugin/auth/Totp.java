@@ -41,18 +41,30 @@ public final class Totp {
     // 但反转方法逻辑（如改名为 isCodeInvalid）会与方法名语义相反，破坏直觉命名
     @SuppressWarnings("BooleanMethodIsAlwaysInverted")
     public static boolean verifyCode(String base32Secret, String code) {
+        return matchCounter(base32Secret, code) != null;
+    }
+
+    /**
+     * 验证验证码并返回其对应的时间片计数器（当前时间 ±1 周期窗口内首个匹配项）。
+     * 供登录路径使用：RFC 6238 验证是无状态的，同一验证码在窗口内可重复匹配，
+     * 调用方记录已消费的 counter 并拒绝同周期或更旧的码即可实现防重放。
+     * @return 匹配的 counter（epoch 起的 30 秒周期数），验证失败返回 null
+     */
+    public static Long matchCounter(String base32Secret, String code) {
         if (base32Secret == null || code == null || !code.matches("\\d{" + CODE_DIGITS + "}")) {
-            return false;
+            return null;
         }
         byte[] key = decodeBase32(base32Secret);
-        if (key.length == 0) return false;
+        if (key.length == 0) return null;
         long now = System.currentTimeMillis() / 1000;
         for (int offset = -WINDOW; offset <= WINDOW; offset++) {
-            if (generateCode(key, now + (long) offset * PERIOD_SECONDS).equals(code)) {
-                return true;
+            // 与 generateCode 的取整口径一致：counter = timeSeconds / PERIOD_SECONDS
+            long timeSeconds = now + (long) offset * PERIOD_SECONDS;
+            if (generateCode(key, timeSeconds).equals(code)) {
+                return timeSeconds / PERIOD_SECONDS;
             }
         }
-        return false;
+        return null;
     }
 
     /** 按 RFC 6238 生成指定时刻的 6 位验证码 */

@@ -316,11 +316,19 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                     if (session.isUpgradeAttempt()) {
                         // 升级成功：将离线账号迁移到正版 UUID（保留退出位置等数据，密码置空）+ 迁移原版玩家数据（背包/成就/统计），清除升级标记
                         dataService.migrateToPremium(session.offlineUuid(), uuid, username, session.ip(), properties);
-                        authManager.migratePlayerData(session.offlineUuid(), uuid);
+                        authManager.migratePlayerDataAsync(session.offlineUuid(), uuid);
                         authManager.clearUpgradePending(session.offlineUuid());
                     } else {
-                        // 首次注册：无密码账户（正版验证即身份凭证，玩家可用 /addpassword 自行设置密码）
-                        dataService.savePremium(uuid, username, session.ip(), properties);
+                        // /premium 强制标记的账号首次正版验证进服：存量记录仍是离线 UUID（仅 premium=1），
+                        // 同样迁移到正版 UUID 并保留退出位置等数据，避免与新建记录并存
+                        PlayerData pending = plugin.getPlayerDataManager().getPlayer(DataService.offlineUuid(username));
+                        if (pending != null && pending.premium()) {
+                            dataService.migrateToPremium(pending.uuid(), uuid, username, session.ip(), properties);
+                            authManager.migratePlayerDataAsync(pending.uuid(), uuid);
+                        } else {
+                            // 首次注册：无密码账户（正版验证即身份凭证，玩家可用 /addpassword 自行设置密码）
+                            dataService.savePremium(uuid, username, session.ip(), properties);
+                        }
                     }
 
                     // 清除 ip+名 回退标记，确保下次优先走正常正版验证
@@ -382,6 +390,10 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     private PlayerData premiumAccountByName(SessionContext session, String username) {
         if (!session.premiumAccount()) return null;
         PlayerData data = dataService.getByName(username);
+        if (data != null && data.premium()) return data;
+        // /premium 强制标记的账号记录仍在离线 UUID 上（名字未写入正版索引），按离线 UUID 定位，
+        // 使验证失败时同样能走密码回退（与正常正版账号行为一致）
+        data = plugin.getPlayerDataManager().getPlayer(DataService.offlineUuid(username));
         return data != null && data.premium() ? data : null;
     }
 
@@ -397,14 +409,14 @@ public final class ConnectionHandler extends PacketListenerAbstract {
     @SuppressWarnings("resource")
     private void proceedWithLogin(Channel channel, User user, SessionContext session,
                                   UUID uuid, String username, String properties) {
-        playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(allowed -> channel.eventLoop().execute(() -> {
+        playerInjector.fireAsyncPreLogin(username, uuid, session.ip()).thenAccept(kickMessage -> channel.eventLoop().execute(() -> {
             if (!channel.isActive()) {
                 cleanupSession(channel);
                 return;
             }
-            if (!allowed) {
-                // 被 KICK：经加密通道发送 Disconnect
-                sendDisconnect(user, I18n.get("listener.premium_invalid_session"));
+            if (kickMessage != null) {
+                // 被 KICK：经加密通道发送 Disconnect（含其他插件设置的理由）
+                sendDisconnect(user, kickMessage);
                 cleanupSession(channel);
                 return;
             }

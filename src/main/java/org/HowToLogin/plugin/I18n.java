@@ -316,7 +316,9 @@ public final class I18n {
     private static String format(String pattern, Object... args) {
         if (args == null || args.length == 0) return pattern;
         try {
-            return MessageFormat.format(pattern, args);
+            // 统一转义单引号：带参数消息中裸单引号会让 MessageFormat 把后续 {n} 当字面量，
+            // 翻译文件无需自行写 '' 转义
+            return MessageFormat.format(pattern.replace("'", "''"), args);
         } catch (Exception e) {
             return pattern;
         }

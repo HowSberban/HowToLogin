@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 // 表 players 在运行时由 initTable() 创建，IDE 静态分析无法解析，抑制 SqlResolve 检查
@@ -40,6 +41,10 @@ public final class PlayerDataManager {
     private static final int MAX_FLUSH_RETRY = 3;
     // 正版玩家名索引：name(小写) → uuid，用于 getByName 快速查找，避免 O(n) 遍历
     private final Map<String, UUID> premiumNameIndex = new ConcurrentHashMap<>();
+    // 数据库全量加载是否失败：失败期间 fail-closed，拒绝新玩家进入（空缓存会把所有玩家误判为未注册）
+    private volatile boolean loadFailed;
+    // 加载失败自动重试任务是否已挂起，防止周期任务叠加
+    private volatile boolean retryScheduled;
 
     // REPLACE INTO 在 SQLite 与 MySQL 均支持：主键存在则先 DELETE 再 INSERT，否则直接 INSERT
     private static final String SQL_UPSERT =
@@ -135,7 +140,7 @@ public final class PlayerDataManager {
         }
     }
 
-    /** 启动时全量加载玩家数据到内存缓存 */
+    /** 启动时全量加载玩家数据到内存缓存；失败时置 fail-closed 标记并自动重试直至成功 */
     public void load() {
         players.clear();
         premiumNameIndex.clear();
@@ -163,9 +168,32 @@ public final class PlayerDataManager {
                     premiumNameIndex.put(data.name().toLowerCase(), uuid);
                 }
             }
+            loadFailed = false;
         } catch (SQLException e) {
+            loadFailed = true;
             plugin.getLogger().severe(I18n.get("log.load_players_failed", e.getMessage()));
+            scheduleLoadRetry();
         }
+    }
+
+    /** 数据库恢复前的自动重试（10 秒周期，成功即停）；期间 isLoadFailed=true 拒绝新玩家进入 */
+    private void scheduleLoadRetry() {
+        if (retryScheduled) return;
+        retryScheduled = true;
+        Bukkit.getAsyncScheduler().runAtFixedRate(plugin, task -> {
+            if (!loadFailed) {
+                retryScheduled = false;
+                task.cancel();
+                return;
+            }
+            plugin.getLogger().warning(I18n.get("log.load_retry"));
+            load();
+        }, 10, 10, TimeUnit.SECONDS);
+    }
+
+    /** 数据库是否处于加载失败状态（fail-closed：玩家数据不可见，调用方应拒绝进入） */
+    public boolean isLoadFailed() {
+        return loadFailed;
     }
 
     /** 标记玩家数据为脏：由周期任务批量落库（合并写、降 DB 开销；崩溃时最多丢失一个 flush 周期内的改动） */
@@ -341,6 +369,50 @@ public final class PlayerDataManager {
                 ps.setBoolean(1, true);
                 ps.setString(2, properties);
                 ps.setString(3, name);
+                ps.setString(4, uuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe(I18n.get("log.save_player_failed", uuid, e.getMessage()));
+            }
+        });
+    }
+
+    /**
+     * 强制标记账号为正版（管理员 /premium）：仅改 premium 标记，
+     * 其余字段（UUID/名字/皮肤等）留待玩家下次正版验证进服时由正式流程写入
+     */
+    public void forceMarkPremium(UUID uuid) {
+        PlayerData data = players.get(uuid);
+        if (data == null) return;
+        data.premium(true);
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_PREMIUM)) {
+                ps.setBoolean(1, true);
+                ps.setString(2, data.properties());
+                ps.setString(3, data.name());
+                ps.setString(4, uuid.toString());
+                ps.executeUpdate();
+            } catch (SQLException e) {
+                plugin.getLogger().severe(I18n.get("log.save_player_failed", uuid, e.getMessage()));
+            }
+        });
+    }
+
+    /**
+     * 撤销强制正版标记（管理员 /premium 对残留态再次切换）：仅把 premium 改回 false。
+     * 该记录本是离线 UUID 且无名字，撤标记后即恢复普通离线账号
+     */
+    public void forceMarkOffline(UUID uuid) {
+        PlayerData data = players.get(uuid);
+        if (data == null) return;
+        data.premium(false);
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(SQL_UPDATE_PREMIUM)) {
+                ps.setBoolean(1, false);
+                ps.setString(2, data.properties());
+                ps.setString(3, data.name());
                 ps.setString(4, uuid.toString());
                 ps.executeUpdate();
             } catch (SQLException e) {

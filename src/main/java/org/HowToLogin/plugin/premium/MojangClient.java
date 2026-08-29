@@ -353,7 +353,7 @@ public final class MojangClient {
     private record QueryResult(Optional<PremiumProfile> profile, boolean available) {
         /** 端点不可用（不可达/过载重试耗尽/总时限耗尽），调用方应换下一个端点 */
         static final QueryResult UNAVAILABLE = new QueryResult(Optional.empty(), false);
-        /** 确定答复：玩家未加入会话（204）/响应缺字段/请求被拒 */
+        /** 确定答复：玩家未加入会话（204）/请求被拒 */
         static final QueryResult NOT_JOINED = new QueryResult(Optional.empty(), true);
     }
 

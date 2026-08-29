@@ -268,9 +268,8 @@ public final class HTLoginCommand {
             Player online = Bukkit.getPlayerExact(targetName);
             if (online != null) {
                 auth.addPendingLogin(online);
-                online.sendMessage(I18n.msg("listener.please_login", online));
-                plugin.getPlayerListener().scheduleReminder(online, true);
-                plugin.getPlayerListener().scheduleLoginTimeout(online, true);
+                // 复用通用挂起：补旁观者保护（登录成功后按存储模式恢复游戏模式）
+                plugin.getPlayerListener().suspend(online, "listener.please_login", true);
             }
         });
         return Command.SINGLE_SUCCESS;

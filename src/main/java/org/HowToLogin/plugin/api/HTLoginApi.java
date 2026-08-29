@@ -11,8 +11,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * HTLogin 插件 API 入口。
@@ -50,6 +52,29 @@ public final class HTLoginApi {
     /** 插件禁用时清理 API 单例（内部调用，不要直接使用） */
     public static void shutdown() {
         instance = null;
+        RATE_LIMITER.clear();
+    }
+
+    // 变更操作限流表：UUID → [窗口起始毫秒, 窗口内计数]，对槽 synchronized 保证原子性
+    private static final Map<UUID, long[]> RATE_LIMITER = new ConcurrentHashMap<>();
+    // 每个 UUID 每秒最多 10 次变更操作（bcrypt/DB 均为较重操作，防外部插件循环调用）
+    private static final int RATE_LIMIT_PER_SECOND = 10;
+
+    /**
+     * 变更操作限流：每 UUID 每秒最多 {@value RATE_LIMIT_PER_SECOND} 次，超限拒绝并返回 false。
+     * 覆盖改密码/改登录态/删号等重操作，防止外部插件 bug 循环调用拖垮数据库或阻塞线程。
+     */
+    private static boolean tryAcquire(UUID uuid) {
+        long now = System.currentTimeMillis();
+        long[] slot = RATE_LIMITER.computeIfAbsent(uuid, k -> new long[2]);
+        synchronized (slot) {
+            if (now - slot[0] >= 1000L) {
+                slot[0] = now;
+                slot[1] = 1;
+                return true;
+            }
+            return ++slot[1] <= RATE_LIMIT_PER_SECOND;
+        }
     }
 
     /**
@@ -102,6 +127,7 @@ public final class HTLoginApi {
      * @return 玩家不在线或已登录时返回 false
      */
     public boolean forceLogin(@NotNull Player player) {
+        if (!tryAcquire(player.getUniqueId())) return false;
         if (authManager.isLoggedIn(player)) return false;
         authManager.forceLogin(player);
         return true;
@@ -113,6 +139,7 @@ public final class HTLoginApi {
      * @return 玩家未登录时返回 false
      */
     public boolean forceLogout(@NotNull UUID uuid) {
+        if (!tryAcquire(uuid)) return false;
         return authManager.forceLogout(uuid);
     }
 
@@ -122,6 +149,7 @@ public final class HTLoginApi {
      * @return 玩家已有账号或同名账号（含正版）已存在时返回 false
      */
     public boolean forceRegister(@NotNull Player player, @NotNull String password) {
+        if (!tryAcquire(player.getUniqueId())) return false;
         if (!authManager.forceRegister(player.getUniqueId(), player.getName(), password)) return false;
         authManager.forceLogin(player);
         return true;
@@ -133,6 +161,7 @@ public final class HTLoginApi {
      * @return 玩家已有账号或同名账号（含正版）已存在时返回 false
      */
     public boolean forceRegister(@NotNull UUID uuid, @NotNull String password) {
+        if (!tryAcquire(uuid)) return false;
         // UUID 反推名字：上过服务器的离线玩家有名字记录，从未上过则返回 null（跳过同名检查）
         return authManager.forceRegister(uuid, Bukkit.getOfflinePlayer(uuid).getName(), password);
     }
@@ -143,6 +172,7 @@ public final class HTLoginApi {
      * @return 玩家无账号时返回 false
      */
     public boolean unregister(@NotNull UUID uuid) {
+        if (!tryAcquire(uuid)) return false;
         return authManager.unregister(uuid);
     }
 
@@ -184,6 +214,7 @@ public final class HTLoginApi {
      * @return 密码正确返回 true，玩家无账号或密码错误返回 false
      */
     public boolean checkPassword(@NotNull UUID uuid, @NotNull String password) {
+        if (!tryAcquire(uuid)) return false;
         PlayerDataManager.PlayerData data = dataManager.getPlayer(uuid);
         if (data == null) return false;
         return PasswordHash.checkPassword(password, data.passwordHash());
@@ -196,6 +227,7 @@ public final class HTLoginApi {
      * @return 玩家无账号时返回 false
      */
     public boolean changePassword(@NotNull UUID uuid, @NotNull String newPassword) {
+        if (!tryAcquire(uuid)) return false;
         return authManager.forceChangePassword(uuid, newPassword);
     }
 }

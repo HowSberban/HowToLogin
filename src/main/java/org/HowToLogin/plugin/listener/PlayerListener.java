@@ -49,6 +49,13 @@ public final class PlayerListener implements Listener {
     public void onPreLogin(AsyncPlayerPreLoginEvent event) {
         var uuid = event.getUniqueId();
 
+        // 数据库加载失败（fail-closed）：缓存为空会把所有玩家误判为未注册，拒绝进入直至恢复
+        if (plugin.getPlayerDataManager().isLoadFailed()) {
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    I18n.msg("login.db_unavailable"));
+            return;
+        }
+
         // 踢出期内拒绝进入
         if (authManager.isKicked(uuid)) {
             long remaining = authManager.getKickRemaining(uuid);
@@ -113,8 +120,8 @@ public final class PlayerListener implements Listener {
             // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，登录收尾与传送延迟到 /2fa 验证完成
             boolean pending2fa = authManager.isPending2fa(player.getUniqueId());
             if (pending2fa) {
-                player.sendMessage(I18n.msg("login.need_2fa", player));
-                scheduleLoginTimeout(player, true);
+                // 未通过 2FA 不算登录成功：与挂起流程一致（旁观保护 + 周期提醒 + 超时）
+                suspend(player, "login.need_2fa", true);
             } else {
                 player.sendMessage(I18n.msg("login.premium_auto_login", player));
             }
@@ -130,8 +137,7 @@ public final class PlayerListener implements Listener {
                 authManager.autoLogin(player);
                 if (authManager.isPending2fa(player.getUniqueId())) {
                     // 已绑定 2FA（pre-join 弹窗未覆盖时的回退）：等待验证码，传送由 /2fa 验证完成流程处理
-                    player.sendMessage(I18n.msg("login.need_2fa", player));
-                    scheduleLoginTimeout(player, true);
+                    suspend(player, "login.need_2fa", true);
                 } else {
                     // 退出位置已在 onSpawnLocation 中设置为出生点，无需传送
                     player.sendMessage(I18n.msg("login.ip_auto_login", player));
@@ -140,6 +146,19 @@ public final class PlayerListener implements Listener {
             }
         }
         beginAuthFlow(player);
+    }
+
+    /**
+     * 通用挂起：旁观者保护 + 消息提示 + 周期提醒 + 超时踢出。
+     * 所有等待登录/2FA 的挂起路径强制复用本方法，防止各分支手工复制漏项。
+     * @param messageKey 挂起时发送的聊天提示 key
+     * @param needsLogin true = 登录流程提示（含 2FA），false = 注册流程提示
+     */
+    public void suspend(Player player, String messageKey, boolean needsLogin) {
+        authManager.setSpectator(player);
+        player.sendMessage(I18n.msg(messageKey, player));
+        scheduleReminder(player, needsLogin);
+        scheduleLoginTimeout(player, needsLogin);
     }
 
     /**
@@ -166,12 +185,10 @@ public final class PlayerListener implements Listener {
             }
             authManager.addPending2fa(player.getUniqueId());
         }
-        authManager.setSpectator(player);
-        player.sendMessage(I18n.msg(
+        suspend(player,
                 passwordless ? "login.passwordless_prompt"
-                        : hasAccount ? "listener.please_login" : "listener.please_register", player));
-        scheduleReminder(player, hasAccount);
-        scheduleLoginTimeout(player, hasAccount);
+                        : hasAccount ? "listener.please_login" : "listener.please_register",
+                hasAccount);
     }
 
     /**
@@ -213,8 +230,9 @@ public final class PlayerListener implements Listener {
 
     /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
     private void sendReminder(Player player, boolean needsLogin) {
-        // 无密码账户提醒输入验证码而非密码
+        // 无密码账户提醒输入验证码而非密码；已过密码待 2FA 的提醒输入验证码
         String key = !needsLogin ? "listener.please_register"
+                : authManager.isPending2fa(player.getUniqueId()) ? "login.need_2fa"
                 : authManager.isPasswordless(player.getUniqueId()) ? "login.passwordless_prompt"
                 : "listener.please_login";
         String method = plugin.getConfigManager().loginRemindMethod();

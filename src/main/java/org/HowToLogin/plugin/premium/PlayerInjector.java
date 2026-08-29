@@ -61,26 +61,55 @@ public final class PlayerInjector {
     }
 
     /**
+     * 启动时静态自检：反射依赖的 NMS 类/字段/枚举在当前服务端版本是否存在。
+     * pipeline 内 packet_handler 等运行期对象无法提前验证，此检查只覆盖静态可验证的部分，
+     * 避免服务端版本更新后玩家卡死在登录阶段才暴露问题。
+     * @return 全部匹配返回 null；否则返回首个缺失项描述
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static String checkNmsCompatibility() {
+        try {
+            Class<?> listener = Class.forName("net.minecraft.server.network.ServerLoginPacketListenerImpl");
+            findField(listener, "authenticatedProfile");
+            findField(listener, "requestedUsername");
+            findField(listener, "state");
+            Class<?> state = Class.forName("net.minecraft.server.network.ServerLoginPacketListenerImpl$State");
+            Enum.valueOf((Class<Enum>) state, "VERIFYING");
+            return null;
+        } catch (ClassNotFoundException | NoSuchFieldException e) {
+            return e.toString();
+        } catch (IllegalArgumentException e) {
+            return "State.VERIFYING missing";
+        }
+    }
+
+    /**
      * 异步触发 AsyncPlayerPreLoginEvent，让其他插件（权限组/领地等）准备玩家数据。
      * 由于取消了 LoginStart，服务端不会自动触发此事件，需手动 callEvent。
      *
      * @param name 玩家名
      * @param uuid 正版 UUID
      * @param ip   玩家 IP
-     * @return true 表示允许继续，false 表示被 KICK
+     * @return null 表示允许继续；非 null 为应断开给客户端的理由（透传其他插件设置的踢出消息）
      */
     // AsyncPlayerPreLoginEvent 标记为 Experimental/removal，实际为登录流程必需的公开 API
     @SuppressWarnings({"removal", "UnstableApiUsage"})
-    public CompletableFuture<Boolean> fireAsyncPreLogin(String name, UUID uuid, String ip) {
+    public CompletableFuture<String> fireAsyncPreLogin(String name, UUID uuid, String ip) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 InetAddress address = InetAddress.getByName(ip);
                 AsyncPlayerPreLoginEvent event = new AsyncPlayerPreLoginEvent(name, address, uuid);
                 event.callEvent();
-                return event.getLoginResult() == AsyncPlayerPreLoginEvent.Result.ALLOWED;
+                if (event.getLoginResult() == AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+                    return null;
+                }
+                // 被其他插件拒绝：透传对方设置的踢出理由，未设置时用通用消息
+                String message = event.getKickMessage();
+                return message == null || message.isEmpty()
+                        ? I18n.get("listener.premium_invalid_session") : message;
             } catch (Exception e) {
                 plugin.getLogger().warning(I18n.get("log.premium_prelogin_failed", name, e.getMessage()));
-                return false;
+                return I18n.get("listener.premium_unavailable");
             }
         }, preLoginExecutor);
     }

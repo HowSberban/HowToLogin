@@ -51,6 +51,9 @@ public final class AuthManager {
     private final Set<UUID> verifying = ConcurrentHashMap.newKeySet();
     // 双因素认证：密码已通过但尚未完成 TOTP 验证的玩家（未完成前不算已登录）
     private final Set<UUID> pending2fa = ConcurrentHashMap.newKeySet();
+    // 已消费的 2FA 时间片计数器：登录验证通过后记录，拒绝同周期或更旧验证码重放
+    // （仅内存，重启清零后同一验证码在 ≤90 秒窗口内理论上可重放一次，风险可忽略）
+    private final Map<UUID, Long> used2faCounters = new ConcurrentHashMap<>();
     // 2FA 会话保持：验证码通过后记录 (ip, 到期时间)，同 IP 短时间内重连免验证码
     // 固定窗口不滑动（命中不续期）；仅内存，重启即失效
     private final Map<UUID, TwoFaSession> twoFaSessions = new ConcurrentHashMap<>();
@@ -562,6 +565,7 @@ public final class AuthManager {
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) return false;
         data.totpSecret(null);
+        used2faCounters.remove(uuid);
         dataManager.save(uuid);
         return true;
     }
@@ -892,7 +896,7 @@ public final class AuthManager {
      * 升级后 UUID 变化，若不迁移这些文件，玩家的背包/成就/统计会丢失。
      * 异步执行文件重命名（阻塞文件 IO，调用方无需关心线程）。
      */
-    public void migratePlayerData(UUID fromUuid, UUID toUuid) {
+    public void migratePlayerDataAsync(UUID fromUuid, UUID toUuid) {
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
             World world = Bukkit.getWorlds().getFirst();
             File worldRoot = worldRoot(world);
@@ -1190,7 +1194,7 @@ public final class AuthManager {
      */
     public void executeDowngrade(UUID premiumUuid, UUID offlineUuid, String name) {
         if (!dataManager.migrateToOffline(premiumUuid, offlineUuid)) return;
-        migratePlayerData(premiumUuid, offlineUuid);
+        migratePlayerDataAsync(premiumUuid, offlineUuid);
         pendingDowngrade.remove(premiumUuid);
         premiumFallback.remove(premiumUuid);
         plugin.getLogger().info(I18n.get("log.downgrade_migrated", name));

@@ -48,6 +48,14 @@ public final class HTLogin extends JavaPlugin {
     public void onEnable() {
         // I18n 必须先初始化：ConfigManager 在检测到配置版本不匹配时会调用 I18n.reload()
         I18n.init(this);
+        // NMS 反射点自检：正版验证依赖 ServerLoginPacketListenerImpl 内部结构，
+        // 服务端版本不匹配时立即禁用自身，避免玩家卡死在登录阶段
+        String nmsError = PlayerInjector.checkNmsCompatibility();
+        if (nmsError != null) {
+            getLogger().severe(I18n.get("log.nms_check_failed", nmsError));
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         this.configManager = new ConfigManager(this);
         this.playerDataManager = new PlayerDataManager(this);
         this.authManager = new AuthManager(this, playerDataManager, configManager);
@@ -138,6 +146,7 @@ public final class HTLogin extends JavaPlugin {
             commands.register("upgrade", "将离线账号升级为正版账号", List.of(), new UpgradeAccountCommand(this, authManager));
             commands.register("downgrade", "将正版账号降级为离线账号", List.of(), new DowngradeAccountCommand(authManager));
             commands.register(new UnregisterCommand(this, authManager).buildNode(), "删除账号（管理员）", List.of());
+            commands.register(new PremiumCommand(this, authManager).buildNode(), "强制切换账号正版状态（管理员）", List.of());
             // 2fa 与 htlogin 一样使用 brigadier 原生注册，子命令作为 literal 节点，
             // 客户端在输入空格后能自动显示子命令列表
             commands.register(new TwoFactorCommand(this, authManager, dialogManager).buildNode(), "双因素认证", List.of("totp"));
