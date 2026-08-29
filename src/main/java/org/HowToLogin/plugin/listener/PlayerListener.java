@@ -439,6 +439,9 @@ public final class PlayerListener implements Listener {
         if (message.startsWith("/")) message = message.substring(1);
         int space = message.indexOf(' ');
         String commandName = (space > 0 ? message.substring(0, space) : message).toLowerCase(Locale.ROOT);
+        // 剥离命令命名空间前缀（/htlogin:login 与 /login 是同一命令，否则无法经命名空间形式登录）
+        int colon = commandName.indexOf(':');
+        if (colon >= 0) commandName = commandName.substring(colon + 1);
 
         // 白名单内的命令允许执行
         if (plugin.getConfigManager().commandWhitelist().contains(commandName)) {
@@ -472,7 +475,14 @@ public final class PlayerListener implements Listener {
             // 未登录玩家或传送过渡期玩家不受伤害
             if (!authManager.isLoggedIn(player) || authManager.isInvulnerablePending(player)) {
                 event.setCancelled(true);
+                return;
             }
+        }
+        // 未登录玩家不可伤害任何实体（左键攻击不经过交互事件，须拦攻击者一侧）
+        if (event instanceof org.bukkit.event.entity.EntityDamageByEntityEvent byEntity
+                && byEntity.getDamager() instanceof Player damager
+                && !authManager.isLoggedIn(damager)) {
+            event.setCancelled(true);
         }
     }
 

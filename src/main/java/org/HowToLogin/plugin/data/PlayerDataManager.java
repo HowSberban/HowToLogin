@@ -22,6 +22,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -45,6 +48,17 @@ public final class PlayerDataManager {
     private volatile boolean loadFailed;
     // 加载失败自动重试任务是否已挂起，防止周期任务叠加
     private volatile boolean retryScheduled;
+    // DB 写串行执行器：所有含 INSERT/REPLACE/DELETE 的写任务单线程排队执行
+    // 注销/迁移先移除内存记录再入队删除任务，upsert 任务执行时复检内存记录仍在——
+    // 复检可见的记录其删除任务必排在本次 upsert 之后，杜绝"已删行被并发 upsert 复活"
+    // （注销账号重启后复活、迁移后新旧 UUID 双记录）
+    private final ExecutorService dbWriteExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "HTLogin-DB-Writer");
+        t.setDaemon(true);
+        return t;
+    });
+    // IP 注册名额锁：同 IP 计数与建号须在同一临界区内完成，防止并发注册同时通过检查突破上限
+    private final Object ipLimitLock = new Object();
 
     // REPLACE INTO 在 SQLite 与 MySQL 均支持：主键存在则先 DELETE 再 INSERT，否则直接 INSERT
     private static final String SQL_UPSERT =
@@ -214,27 +228,51 @@ public final class PlayerDataManager {
             if (data != null) toSave.add(data);
         }
         if (toSave.isEmpty()) return;
-
-        // 批量写失败时按重试上限重新标记脏，等待下轮 flush；成功则清除重试计数
-        if (upsertBatchSync(toSave)) {
+        // 落库经串行写队列执行：与注销/迁移的删除任务按入队顺序落库
+        submitDbWrite(() -> {
+            // 执行时复检内存状态：快照后被移除或替换的记录跳过（已注销/迁移的账号不得被 upsert 复活）
+            List<PlayerData> valid = new ArrayList<>(toSave.size());
             for (PlayerData data : toSave) {
-                flushFailures.remove(data.uuid());
+                if (players.get(data.uuid()) == data) valid.add(data);
             }
-        } else {
-            for (PlayerData data : toSave) {
-                int n = flushFailures.merge(data.uuid(), 1, Integer::sum);
-                if (n < MAX_FLUSH_RETRY) {
-                    dirty.add(data.uuid());
-                } else {
-                    flushFailures.remove(data.uuid()); // 放弃，停止重试
+            if (valid.isEmpty()) return;
+            // 批量写失败时按重试上限重新标记脏，等待下轮 flush；成功则清除重试计数
+            if (upsertBatchSync(valid)) {
+                for (PlayerData data : valid) {
+                    flushFailures.remove(data.uuid());
+                }
+            } else {
+                for (PlayerData data : valid) {
+                    int n = flushFailures.merge(data.uuid(), 1, Integer::sum);
+                    if (n < MAX_FLUSH_RETRY) {
+                        dirty.add(data.uuid());
+                    } else {
+                        flushFailures.remove(data.uuid()); // 放弃，停止重试
+                    }
                 }
             }
+        });
+    }
+
+    /** DB 写任务加入串行队列。插件停用后队列已关闭，提交被丢弃（saveSync 全量落库兜底） */
+    private void submitDbWrite(Runnable job) {
+        try {
+            dbWriteExecutor.execute(job);
+        } catch (RejectedExecutionException ignored) {
+            // 队列已关闭（停用中）：丢弃，saveSync 全量保存兜底
         }
     }
 
-    /** 同步全量保存，用于 onDisable（必须在关服前完成，覆盖全部内存数据含脏标记） */
+    /** 同步全量保存，用于 onDisable（必须在关服前完成，覆盖全部内存数据含脏标记）。
+     *  先排空串行写队列（在途删除/upsert 先落库），再直接全量写入最终状态 */
     public void saveSync() {
         dirty.clear();
+        dbWriteExecutor.shutdown();
+        try {
+            dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         saveAllSync();
     }
 
@@ -312,27 +350,38 @@ public final class PlayerDataManager {
         saveNow(data);
     }
 
-    /** 仅内存建号（不落库）：供 registerAsync 在玩家区域线程调用，落库由调用方异步执行 */
-    public void createPlayerInMemory(UUID uuid, String passwordHash, String ip) {
-        players.put(uuid, new PlayerData(uuid, null, passwordHash, ip,
-                nowEpochSeconds(), null, false, null, null, null, 0));
-    }
-
-    /** 异步立即落库：供 registerAsync 等不可丢失的关键操作在区域线程触发，IO 在异步线程执行 */
-    public void saveNowAsync(UUID uuid) {
-        PlayerData data = players.get(uuid);
-        if (data == null) return;
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> saveNow(data));
-    }
-
-    /** 立即同步落库单个玩家数据（用于注册等不可丢失的关键操作），失败时退化为脏标记由周期任务兜底重试 */
-    private void saveNow(PlayerData data) {
-        if (!upsertBatchSync(List.of(data))) {
-            // 立即写失败：转交周期 flush 兜底重试
-            dirty.add(data.uuid());
-        } else {
-            flushFailures.remove(data.uuid());
+    /**
+     * 受同 IP 名额限制的原子建号：计数与建号在同一临界区内完成，并发注册同一 IP
+     * 不会全部通过检查（防止 max-accounts-per-ip 被并发绕过）
+     * @param maxAccounts 每 IP 允许的最大账号数（<=0 或 ip 为 null 时不限制）
+     * @return 建号成功返回账号数据；名额已满返回 null
+     */
+    public PlayerData createPlayerIfIpAllowed(UUID uuid, String passwordHash, String ip, int maxAccounts) {
+        synchronized (ipLimitLock) {
+            if (maxAccounts > 0 && ip != null) {
+                long count = players.values().stream().filter(d -> ip.equals(d.ip())).count();
+                if (count >= maxAccounts) return null;
+            }
+            PlayerData data = new PlayerData(uuid, null, passwordHash, ip, nowEpochSeconds(), null, false, null, null, null, 0);
+            players.put(uuid, data);
+            // 创建账号为关键操作：立即落库，避免崩溃丢新账号
+            saveNow(data);
+            return data;
         }
+    }
+
+    /** 立即落库单个玩家数据，失败时退化为脏标记由周期任务兜底重试。
+     *  经串行写队列执行并复检内存记录仍在：快照后被移除（注销/迁移）的账号不得被落库复活 */
+    private void saveNow(PlayerData data) {
+        submitDbWrite(() -> {
+            if (players.get(data.uuid()) != data) return;
+            if (!upsertBatchSync(List.of(data))) {
+                // 立即写失败：转交周期 flush 兜底重试
+                dirty.add(data.uuid());
+            } else {
+                flushFailures.remove(data.uuid());
+            }
+        });
     }
 
     /**
@@ -441,7 +490,8 @@ public final class PlayerDataManager {
                 offline.totpSecret(), offline.lastActive());
         players.put(premiumUuid, premium);
         premiumNameIndex.put(name.toLowerCase(), premiumUuid);
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+        // 迁移事务经串行写队列执行：与 flush/saveNow 的 upsert 保证落库顺序
+        submitDbWrite(() -> {
             try (Connection conn = dataSource.getConnection()) {
                 // 删除离线记录与写入正版记录须在同一事务，避免中途崩溃导致两记录皆失（账号丢失）
                 conn.setAutoCommit(false);
@@ -485,7 +535,8 @@ public final class PlayerDataManager {
                 premium.lastLogin(), premium.logoutLocation(), false, null, premium.gameMode(),
                 premium.totpSecret(), premium.lastActive());
         players.put(offlineUuid, offline);
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+        // 迁移事务经串行写队列执行：与 flush/saveNow 的 upsert 保证落库顺序
+        submitDbWrite(() -> {
             try (Connection conn = dataSource.getConnection()) {
                 // 删除正版记录与写入离线记录须在同一事务，避免中途崩溃导致两记录皆失（账号丢失）
                 conn.setAutoCommit(false);
@@ -561,7 +612,8 @@ public final class PlayerDataManager {
         // 清理落库相关状态：账号已删除，脏标记与重试计数不再有意义（防止残留）
         dirty.remove(uuid);
         flushFailures.remove(uuid);
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+        // 删除经串行写队列执行：内存已先移除，排在前面的在途 upsert 会因执行时复检被跳过
+        submitDbWrite(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(SQL_DELETE)) {
                 ps.setString(1, uuid.toString());
@@ -583,6 +635,8 @@ public final class PlayerDataManager {
         List<UUID> toDelete = new ArrayList<>();
         for (PlayerData data : players.values()) {
             if (data.premium()) continue;
+            // 在线玩家跳过：/reload 重新启用时不会触发 PlayerJoinEvent 刷新活跃时间，在线期间的活跃度停留在上线时刻
+            if (Bukkit.getPlayer(data.uuid()) != null) continue;
             long activity = Math.max(data.lastActive(), data.lastLogin());
             if (activity > 0 && activity < threshold) {
                 toDelete.add(data.uuid());
@@ -610,8 +664,14 @@ public final class PlayerDataManager {
         });
     }
 
-    /** 关闭数据源，释放连接池 */
+    /** 关闭数据源，释放连接池（确保串行写队列先排空，防止在途写任务打到已关闭的池） */
     public void close() {
+        dbWriteExecutor.shutdown();
+        try {
+            dbWriteExecutor.awaitTermination(30, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
         }

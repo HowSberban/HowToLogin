@@ -13,6 +13,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
+import java.util.UUID;
+
 import static io.papermc.paper.command.brigadier.Commands.argument;
 import static io.papermc.paper.command.brigadier.Commands.literal;
 
@@ -47,7 +49,9 @@ public final class PremiumCommand {
         String targetName = StringArgumentType.getString(ctx, "player");
 
         // 纯内存改标记 + 异步落库，无阻塞 IO，主线程直接执行
-        PlayerData data = plugin.getPlayerDataManager().getPlayer(plugin.getPlayerDataManager().findUuidByName(targetName));
+        // 先判 null：findUuidByName 对无账号名字返回 null，直接传入 getPlayer 会抛 NPE
+        UUID targetUuid = plugin.getPlayerDataManager().findUuidByName(targetName);
+        PlayerData data = targetUuid == null ? null : plugin.getPlayerDataManager().getPlayer(targetUuid);
         if (data == null) {
             sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
             return Command.SINGLE_SUCCESS;

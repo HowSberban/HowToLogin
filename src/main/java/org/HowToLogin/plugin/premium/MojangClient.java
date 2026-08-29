@@ -245,22 +245,29 @@ public final class MojangClient {
      */
     public CompletableFuture<Optional<PremiumProfile>> hasJoined(String serverHash, String username) {
         return CompletableFuture.supplyAsync(() -> {
-            ConfigManager config = plugin.getConfigManager();
-            long deadline = System.currentTimeMillis() + config.premiumVerifyDeadlineMs();
-            String encodedName = URLEncoder.encode(username, StandardCharsets.UTF_8);
-            // 依次尝试端点，直到某个端点给出确定答复或总时限耗尽
-            for (Endpoint endpoint : buildEndpoints()) {
-                if (System.currentTimeMillis() >= deadline) break;
-                QueryResult result = queryServer(endpoint, serverHash, encodedName, username, config, deadline);
-                if (result.available()) {
-                    return result.profile(); // 该端点可达且给出确定答复（验证成功或未加入）
+            try {
+                ConfigManager config = plugin.getConfigManager();
+                long deadline = System.currentTimeMillis() + config.premiumVerifyDeadlineMs();
+                String encodedName = URLEncoder.encode(username, StandardCharsets.UTF_8);
+                // 依次尝试端点，直到某个端点给出确定答复或总时限耗尽
+                for (Endpoint endpoint : buildEndpoints()) {
+                    if (System.currentTimeMillis() >= deadline) break;
+                    QueryResult result = queryServer(endpoint, serverHash, encodedName, username, config, deadline);
+                    if (result.available()) {
+                        return result.profile(); // 该端点可达且给出确定答复（验证成功或未加入）
+                    }
+                    // available=false：该端点不可用（不可达/持续过载/时限耗尽），尝试下一个
+                    plugin.getLogger().warning(I18n.get("log.premium_session_server_unavailable", endpoint.description()));
                 }
-                // available=false：该端点不可用（不可达/持续过载/时限耗尽），尝试下一个
-                plugin.getLogger().warning(I18n.get("log.premium_session_server_unavailable", endpoint.description()));
+                // 所有端点均不可用或总时限耗尽
+                logHasJoinedFailed(username, "all session servers unavailable");
+                return Optional.empty();
+            } catch (Exception e) {
+                // 端点 URL 畸形、响应字段非法等运行时异常：视为验证失败走踢出路径，
+                // 避免 future 异常完成后回调不执行，导致会话泄漏、玩家卡在加密阶段
+                logHasJoinedFailed(username, e.toString());
+                return Optional.empty();
             }
-            // 所有端点均不可用或总时限耗尽
-            logHasJoinedFailed(username, "all session servers unavailable");
-            return Optional.empty();
         }, httpExecutor);
     }
 

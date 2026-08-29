@@ -81,8 +81,10 @@ public final class AuthManager {
     private final Set<UUID> pendingUpgrade = ConcurrentHashMap.newKeySet();
     // 正版账号降级标记（内存，不持久化）：下次进入时迁移数据到离线 UUID
     private final Set<UUID> pendingDowngrade = ConcurrentHashMap.newKeySet();
-    // 正版验证失败回退进入的正版玩家（正版 UUID）：本次需密码登录，不自动免密
-    private final Set<UUID> premiumFallback = ConcurrentHashMap.newKeySet();
+    // 正版验证失败回退进入的正版玩家（正版 UUID → 标记时间戳）：本次需密码登录，不自动免密。
+    // 标记仅代表当前连接会话，正常路径由退出清理；未进世界即断开的连接无退出事件，靠 TTL 过期兜底，
+    // TTL 复用回退确认窗口（premium.fallback.cache-seconds）
+    private final Map<UUID, Long> premiumFallback = new ConcurrentHashMap<>();
     // 登录超时任务启动时间戳：用于判断超时任务是否为最新（重启时旧任务自动失效）
     private final Map<UUID, Long> loginTimeoutStartedAt = new ConcurrentHashMap<>();
     // 缓存世界结构类型：26.1+ 采用新结构（players/data + dimensions/minecraft/overworld）
@@ -98,9 +100,11 @@ public final class AuthManager {
         this.dataManager = dataManager;
         this.configManager = configManager;
         this.newWorldStructure = detectNewWorldStructure();
-        // 周期清理过期的 2FA 临时密钥（懒清理兜底，随插件关闭统一取消）
-        Bukkit.getAsyncScheduler().runAtFixedRate(plugin, task -> cleanupExpired2faSecrets(),
-                1, 30, TimeUnit.SECONDS);
+        // 周期清理过期的 2FA 临时密钥与登录/2FA 会话等状态（懒清理兜底，随插件关闭统一取消）
+        Bukkit.getAsyncScheduler().runAtFixedRate(plugin, task -> {
+            cleanupExpired2faSecrets();
+            cleanupExpiredStates();
+        }, 1, 30, TimeUnit.SECONDS);
     }
 
     /**
@@ -149,7 +153,7 @@ public final class AuthManager {
     }
 
     // Registration
-    /** 创建账号（哈希+写库），同名账号（含正版）已存在时拒绝，维持用户名全局唯一。forceRegister/registerConfig 复用；name 为 null 时仅按 UUID 查重；ip 可为 null（记为 "unknown"） */
+    /** 创建账号（哈希+写库）：强制注册专用（管理员绕过 IP 名额限制）；同名账号（含正版）已存在时拒绝，维持用户名全局唯一。name 为 null 时仅按 UUID 查重；ip 可为 null（记为 "unknown"） */
     private boolean createAccount(UUID uuid, String name, String password, String ip) {
         if (dataManager.hasAccountByName(name) || dataManager.hasAccount(uuid)) {
             return false;
@@ -178,9 +182,13 @@ public final class AuthManager {
                     done.accept(false);
                     return;
                 }
-                // 建号+登录收尾在区域线程（轻量），立即落库异步执行（关键操作防崩溃丢失）
-                dataManager.createPlayerInMemory(uuid, hash, ip != null ? ip : "unknown");
-                dataManager.saveNowAsync(uuid);
+                // 建号+登录收尾在区域线程（轻量），立即落库（关键操作防崩溃丢失，经串行写队列）
+                // 名额判定与建号原子完成：并发注册同一 IP 不会全部通过检查（防 max-accounts-per-ip 被绕过）
+                if (dataManager.createPlayerIfIpAllowed(uuid, hash, ip != null ? ip : "unknown",
+                        configManager.maxAccountsPerIp()) == null) {
+                    done.accept(false);
+                    return;
+                }
                 markLoggedIn(uuid);
                 onLoginSuccess(player);
                 fireEvent(new HTLoginRegisterEvent(uuid, player));
@@ -204,10 +212,17 @@ public final class AuthManager {
 
     /** 配置阶段注册（Pre-join Dialog）：仅创建账号，登录状态与注册事件延迟到玩家进入世界时处理。IP 已满或同名账号已存在时拒绝 */
     public boolean registerConfig(UUID uuid, String name, String password, String ip) {
+        // 前置快速判定（避免无谓的 bcrypt 计算）；权威判定在建号临界区内原子完成
         if (isIpAccountLimitReached(ip)) {
             return false;
         }
-        return createAccount(uuid, name, password, ip);
+        if (dataManager.hasAccountByName(name) || dataManager.hasAccount(uuid)) {
+            return false;
+        }
+        String hash = PasswordHash.hashPassword(password, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
+        // 名额判定与建号原子完成：并发注册同一 IP 不会全部通过检查（防 max-accounts-per-ip 被绕过）
+        return dataManager.createPlayerIfIpAllowed(uuid, hash, ip != null ? ip : "unknown",
+                configManager.maxAccountsPerIp()) != null;
     }
 
     // Login
@@ -242,6 +257,11 @@ public final class AuthManager {
             // 状态变更需回到玩家区域线程（Folia 线程安全）
             player.getScheduler().run(plugin, task2 -> {
                 verifying.remove(uuid);
+                // 回调期间被强制登录或账号被注销（管理员操作与异步校验的竞态）：丢弃本次结果
+                // 避免二次登录收尾（重复事件/覆盖会话时间）与注销后的幽灵登录
+                if (loggedIn.contains(uuid) || dataManager.getPlayer(uuid) == null) {
+                    return;
+                }
                 if (!ok) {
                     handleLoginFailure(uuid, player);
                     done.accept(LoginResult.FAILED, isKicked(player) ? getKickRemaining(player) : 0L);
@@ -478,11 +498,15 @@ public final class AuthManager {
         if (!pending2fa.remove(uuid)) return null;
         PlayerData data = dataManager.getPlayer(uuid);
         if (data == null || data.totpSecret() == null) return null;
-        if (!Totp.verifyCode(data.totpSecret(), code)) {
+        Long counter = Totp.matchCounter(data.totpSecret(), code);
+        // 防重放：同周期或更旧的验证码视为已消费拒绝（TOTP 无状态，同一码在 ±1 窗口内可重复匹配）
+        // 入口 pending2fa.remove 已保证同一玩家同一时刻仅一个线程进入消费路径，check-then-put 无竞态
+        if (counter == null || counter <= used2faCounters.getOrDefault(uuid, Long.MIN_VALUE)) {
             handleLoginFailure(uuid, player);
             pending2fa.add(uuid);
             return null;
         }
+        used2faCounters.put(uuid, counter);
         mark2faSession(uuid, ip);
         return data;
     }
@@ -1063,15 +1087,17 @@ public final class AuthManager {
     }
 
     /**
-     * 全量清理已过期的踢出记录、失败计数和注销拒绝重连记录（reload 和 unregister 时调用）。
-     * 常规运行依赖懒清理（读取时发现过期即删）+ 容量守卫（failedAttempts 超 1000 触发），
-     * 不再登录的玩家条目会残留但仅几十字节/条，无需周期任务扫描。
+     * 清理已过期的踢出记录、失败计数、2FA/登录会话与注销拒绝重连记录（30 秒周期任务 + reload/unregister 时调用）。
+     * 登录会话只在读取时判定过期（玩家不再上线则条目无读取机会），须依赖周期清理防止常驻内存
      */
     public void cleanupExpiredStates() {
         long now = System.currentTimeMillis();
         kickUntil.values().removeIf(until -> until <= now);
         evictStaleFailures(now);
         twoFaSessions.entrySet().removeIf(e -> now > e.getValue().expiresAt());
+        // 清理已过期的登录会话（固定窗口，命中不续期）
+        long sessionMs = TimeUnit.MINUTES.toMillis(configManager.sessionExpireMinutes());
+        loginSessions.entrySet().removeIf(e -> now - e.getValue().establishedAt() >= sessionMs);
         // 清理已过期的注销拒绝重连记录
         recentUnregister.entrySet().removeIf(entry -> now - entry.getValue() >= UNREGISTER_RECONNECT_DELAY);
     }
@@ -1202,7 +1228,7 @@ public final class AuthManager {
 
     /** 标记正版玩家本次为正版验证失败回退进入（需密码登录） */
     public void markPremiumFallback(UUID premiumUuid) {
-        premiumFallback.add(premiumUuid);
+        premiumFallback.put(premiumUuid, System.currentTimeMillis());
     }
 
     /** 清除正版回退标记（密码登录成功或下次正版验证成功时调用） */
@@ -1210,9 +1236,17 @@ public final class AuthManager {
         premiumFallback.remove(premiumUuid);
     }
 
-    /** 正版玩家是否为验证失败回退进入（本次需密码登录） */
+    /** 正版玩家是否为验证失败回退进入（本次需密码登录）。
+     *  超过回退确认窗口的残留标记视为过期（回退后未进世界即断开的连接无退出事件清理），按正常正版流程处理 */
     public boolean isPremiumFallback(UUID premiumUuid) {
-        return premiumFallback.contains(premiumUuid);
+        Long markedAt = premiumFallback.get(premiumUuid);
+        if (markedAt == null) return false;
+        long ttl = configManager.premiumFallbackCacheSeconds() * 1000L;
+        if (System.currentTimeMillis() - markedAt >= ttl) {
+            premiumFallback.remove(premiumUuid);
+            return false;
+        }
+        return true;
     }
 
     /**

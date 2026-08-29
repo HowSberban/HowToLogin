@@ -299,12 +299,13 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                             proceedWithLogin(channel, user, session, premiumData.uuid(), username, premiumData.properties());
                             return;
                         }
-                        // 否则经加密通道发送 Disconnect 踢出
+                        // 否则踢出（发送 Disconnect 并兜底关闭连接）
                         channel.eventLoop().execute(() -> {
                             if (channel.isActive()) {
-                                sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                                kick(channel, user, HTLogin.legacy(I18n.get("listener.premium_unavailable")));
+                            } else {
+                                cleanupSession(channel);
                             }
-                            cleanupSession(channel);
                         });
                         return;
                     }
@@ -345,9 +346,10 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                     plugin.getLogger().severe(I18n.get("log.premium_async_failed", e.getMessage()));
                     channel.eventLoop().execute(() -> {
                         if (channel.isActive()) {
-                            sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                            kick(channel, user, HTLogin.legacy(I18n.get("listener.premium_unavailable")));
+                        } else {
+                            cleanupSession(channel);
                         }
-                        cleanupSession(channel);
                     });
                 }
             });
@@ -415,16 +417,15 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                 return;
             }
             if (kickMessage != null) {
-                // 被 KICK：经加密通道发送 Disconnect（含其他插件设置的理由）
-                sendDisconnect(user, kickMessage);
-                cleanupSession(channel);
+                // 被 KICK：经加密通道发送 Disconnect（含其他插件设置的理由）并兜底关闭
+                kick(channel, user, kickMessage);
                 return;
             }
             try {
                 playerInjector.setProfileAndAdvanceState(channel, uuid, username, properties);
             } catch (Exception e) {
                 plugin.getLogger().severe(I18n.get("log.premium_state_advance_failed", e.toString()));
-                sendDisconnect(user, I18n.get("listener.premium_unavailable"));
+                kick(channel, user, HTLogin.legacy(I18n.get("listener.premium_unavailable")));
             } finally {
                 cleanupSession(channel);
             }
@@ -449,11 +450,22 @@ public final class ConnectionHandler extends PacketListenerAbstract {
         }
     }
 
-    /** 经已加密通道发送 Disconnect 包 */
+    /** 经已加密通道发送 Disconnect 包（& 颜色代码字符串） */
     private void sendDisconnect(User user, String message) {
-        WrapperLoginServerDisconnect disconnect = new WrapperLoginServerDisconnect(
-                HTLogin.legacy(message));
+        sendDisconnect(user, HTLogin.legacy(message));
+    }
+
+    /** 经已加密通道发送 Disconnect 包（直接发送 Component，保留其他插件设置的消息样式） */
+    private void sendDisconnect(User user, net.kyori.adventure.text.Component message) {
+        WrapperLoginServerDisconnect disconnect = new WrapperLoginServerDisconnect(message);
         user.sendPacket(disconnect);
+    }
+
+    /** 踢出连接：发送 Disconnect 后延迟关闭 channel（恶意客户端可无视 Disconnect 保持连接），并清理会话 */
+    private void kick(Channel channel, User user, net.kyori.adventure.text.Component message) {
+        sendDisconnect(user, message);
+        channel.eventLoop().schedule(() -> { channel.close(); }, 5, TimeUnit.SECONDS);
+        cleanupSession(channel);
     }
 
     /** 移除 pipeline 中的断开检测器 */

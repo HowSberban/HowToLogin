@@ -9,6 +9,8 @@ import com.mojang.authlib.properties.Property;
 import com.mojang.authlib.properties.PropertyMap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelPipeline;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
@@ -94,7 +96,7 @@ public final class PlayerInjector {
      */
     // AsyncPlayerPreLoginEvent 标记为 Experimental/removal，实际为登录流程必需的公开 API
     @SuppressWarnings({"removal", "UnstableApiUsage"})
-    public CompletableFuture<String> fireAsyncPreLogin(String name, UUID uuid, String ip) {
+    public CompletableFuture<Component> fireAsyncPreLogin(String name, UUID uuid, String ip) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 InetAddress address = InetAddress.getByName(ip);
@@ -103,13 +105,14 @@ public final class PlayerInjector {
                 if (event.getLoginResult() == AsyncPlayerPreLoginEvent.Result.ALLOWED) {
                     return null;
                 }
-                // 被其他插件拒绝：透传对方设置的踢出理由，未设置时用通用消息
-                String message = event.getKickMessage();
-                return message == null || message.isEmpty()
-                        ? I18n.get("listener.premium_invalid_session") : message;
+                // 被其他插件拒绝：透传对方设置的踢出理由（kickMessage 为 @NotNull，内容为空时用通用消息）
+                // 直接返回 Component，避免 § 颜色码经字符串往返后丢失样式
+                Component kick = event.kickMessage();
+                return PlainTextComponentSerializer.plainText().serialize(kick).isEmpty()
+                        ? HTLogin.legacy(I18n.get("listener.premium_invalid_session")) : kick;
             } catch (Exception e) {
                 plugin.getLogger().warning(I18n.get("log.premium_prelogin_failed", name, e.getMessage()));
-                return I18n.get("listener.premium_unavailable");
+                return HTLogin.legacy(I18n.get("listener.premium_unavailable"));
             }
         }, preLoginExecutor);
     }
