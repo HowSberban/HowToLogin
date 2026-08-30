@@ -154,6 +154,20 @@ public final class ConfigManager {
     private boolean premiumPasswordFallbackEnabled;
     // 回退标记有效期（秒），过期后重连重新尝试正版验证
     private int premiumFallbackCacheSeconds;
+    // 加入/退出消息：完全禁用所有玩家的加入消息（开启后忽略其余加入消息选项）
+    private boolean joinDisabled;
+    // 加入/退出消息：完全禁用所有玩家的退出消息（开启后忽略其余退出消息选项）
+    private boolean quitDisabled;
+    // 加入/退出消息：未登录（未完成登录/注册）时隐藏原版加入消息
+    private boolean joinHideUnauthenticated;
+    // 加入/退出消息：隐藏后在登录成功时补发；未登录就退出则丢弃
+    private boolean joinDelayUntilAuthenticated;
+    // 加入/退出消息：自定义加入消息模板（空 = 保留原版消息）
+    private String joinMessageTemplate;
+    // 加入/退出消息：未登录时隐藏原版退出消息
+    private boolean quitHideUnauthenticated;
+    // 加入/退出消息：自定义退出消息模板（空 = 保留原版消息）
+    private String quitMessageTemplate;
 
     public ConfigManager(HTLogin plugin) {
         this.plugin = plugin;
@@ -179,6 +193,7 @@ public final class ConfigManager {
         loadPreventConfig(config);
         loadProtectionConfig(config);
         loadPremiumConfig(config);
+        loadMessageConfig(config);
 
         // 通用设置
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
@@ -474,6 +489,17 @@ public final class ConfigManager {
         plugin.saveConfig();
     }
 
+    // 加入/退出消息
+    private void loadMessageConfig(FileConfiguration config) {
+        this.joinDisabled = config.getBoolean("messages.join.disabled", false);
+        this.joinHideUnauthenticated = config.getBoolean("messages.join.hide-unauthenticated", true);
+        this.joinDelayUntilAuthenticated = config.getBoolean("messages.join.delay-until-authenticated", true);
+        this.joinMessageTemplate = config.getString("messages.join.template", "");
+        this.quitDisabled = config.getBoolean("messages.quit.disabled", false);
+        this.quitHideUnauthenticated = config.getBoolean("messages.quit.hide-unauthenticated", true);
+        this.quitMessageTemplate = config.getString("messages.quit.template", "");
+    }
+
     /**
      * 重新加载配置。
      * 数据库配置变化时数据源无法运行时重建，但 ConfigManager 字段仍更新为配置文件当前值，
@@ -645,5 +671,13 @@ public final class ConfigManager {
     public boolean premiumDowngradeEnabled() { return premiumDowngradeEnabled; }
     public boolean premiumPasswordFallbackEnabled() { return premiumPasswordFallbackEnabled; }
     public int premiumFallbackCacheSeconds() { return premiumFallbackCacheSeconds; }
+
+    public boolean joinDisabled() { return joinDisabled; }
+    public boolean joinHideUnauthenticated() { return joinHideUnauthenticated; }
+    public boolean joinDelayUntilAuthenticated() { return joinDelayUntilAuthenticated; }
+    public String joinMessageTemplate() { return joinMessageTemplate == null ? "" : joinMessageTemplate; }
+    public boolean quitDisabled() { return quitDisabled; }
+    public boolean quitHideUnauthenticated() { return quitHideUnauthenticated; }
+    public String quitMessageTemplate() { return quitMessageTemplate == null ? "" : quitMessageTemplate; }
 
 }

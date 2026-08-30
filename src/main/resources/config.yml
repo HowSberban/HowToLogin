@@ -169,6 +169,28 @@ pearl:
   # entity: 在退出时的位置重新生成飞行珍珠
   return: item
 
+# 加入/退出消息
+messages:
+  join:
+    # 设为 true 时完全禁用所有玩家的加入消息（无论登录状态，忽略下方其余选项）
+    disabled: false
+    # 未登录（未完成登录/注册）时隐藏原版加入消息（已登录玩家不受影响）
+    hide-unauthenticated: true
+    # 隐藏后是否在登录成功时补发：模板为空补发原版消息，否则补发模板内容
+    # 仅在 hide-unauthenticated 开启时生效；玩家未登录就退出则丢弃不补发
+    # 补发不走加入事件：若服务器装有强制隐藏所有加入消息的插件，请关闭本项
+    delay-until-authenticated: true
+    # 自定义加入消息模板，留空保留原版消息
+    # 支持 & 颜色代码与占位符 {player}（玩家名）、{displayname}（显示名）
+    template: ""
+  quit:
+    # 设为 true 时完全禁用所有玩家的退出消息（无论登录状态，忽略下方其余选项）
+    disabled: false
+    # 未登录时隐藏原版退出消息（登录超时被踢等场景不暴露"有人卡在登录界面"；已登录玩家不受影响）
+    hide-unauthenticated: true
+    # 自定义退出消息模板，留空保留原版消息，占位符同加入模板
+    template: ""
+
 # 通用设置
 settings:
   # 默认语言
@@ -221,7 +243,7 @@ premium:
   # 离线账号升级为正版：是否允许玩家从离线升级为正版
   upgrade: true
   # 正版账号降级为离线：是否允许玩家从正版降级为离线
-  downgrade: true
+  downgrade: false
   # 正版验证失败时的回退登录（仅对已注册正版玩家生效），不安全，不建议开启
   # 放行玩家并以已记录的正版 UUID 进入，走密码登录
   # 开启后风险：

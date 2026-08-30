@@ -12,6 +12,7 @@ import org.howtologin.plugin.data.PlayerDataManager;
 import org.howtologin.plugin.dialog.DialogManager;
 import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.howtologin.plugin.hook.HTLoginExpansion;
+import org.howtologin.plugin.listener.JoinQuitMessageService;
 import org.howtologin.plugin.listener.PlayerListener;
 import org.howtologin.plugin.packet.InventoryPacketListener;
 import org.howtologin.plugin.pearl.PendingPearlManager;
@@ -34,6 +35,8 @@ public final class HTLogin extends JavaPlugin {
     private PlayerListener playerListener;
     // 飞行末影珍珠保管：统一接管退出/进入/返还路径，防止未登录玩家被珍珠传送
     private PendingPearlManager pendingPearlManager;
+    // 加入/退出消息：自定义模板 + 未登录隐藏 + 登录成功补发
+    private JoinQuitMessageService joinQuitMessageService;
     // Dialog API 构建器：开关关闭或服务端不支持（<1.21.11）时为 null，pre-join 与游戏内 2FA 绑定均回退
     private DialogManager dialogManager;
     // Pre-join Dialog（配置阶段认证）：配置事件 API 不可用时为 null，自动回退聊天栏提示
@@ -160,6 +163,9 @@ public final class HTLogin extends JavaPlugin {
         // 末影珍珠保管：独立监听器（接管飞行珍珠，登录后按配置返还）
         pendingPearlManager = new PendingPearlManager(this);
         getServer().getPluginManager().registerEvents(pendingPearlManager, this);
+        // 加入/退出消息：独立监听器（模板替换 + 未登录隐藏 + 登录成功补发）
+        joinQuitMessageService = new JoinQuitMessageService(authManager, configManager);
+        getServer().getPluginManager().registerEvents(joinQuitMessageService, this);
     }
 
     /** 注册 PacketEvents 数据包监听器（背包保护：拦截容器/装备同步包） */
