@@ -104,11 +104,13 @@ public final class TwoFactorCommand {
         String secret = authManager.setup2fa(player);
         // 扫码 URL 只与密钥和配置相关，绑定会话期间不变，算一次复用
         String url = qrUrl(player, secret);
-        if (dialogManager != null) {
-            // Dialog 可用时聊天栏完全静默，两者互斥（扫码入口在对话框按钮上）
+        // Dialog 可用时聊天栏完全静默，两者互斥（扫码入口在对话框按钮上）
+        // 运行时复查 login.dialog.enabled：reload 关闭配置后 dialogManager 仍非空（启动时创建、reload 不重建），
+        // 需按当前配置回退聊天栏，与 PreJoinAuthListener 的运行时检查保持一致
+        if (dialogManager != null && plugin.getConfigManager().loginDialogEnabled()) {
             showSetupDialog(player, secret, url, null);
         } else {
-            // 服务端不支持 Dialog（<1.21.11/未启用）：回退聊天栏展示密钥与完成指引
+            // dialog 关闭/服务端不支持（<1.21.11）：回退聊天栏展示密钥与完成指引
             player.sendMessage(buildSetupMessage(player, secret, url));
         }
         return Command.SINGLE_SUCCESS;
