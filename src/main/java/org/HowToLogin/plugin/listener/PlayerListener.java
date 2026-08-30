@@ -96,7 +96,7 @@ public final class PlayerListener implements Listener {
         // 清理上一会话残留的登录失明（药水效果随 .dat 保存，崩溃重连后仍在）；
         // 本监听器最先注册，先于其它插件的 join 处理执行，不会误删后者施加的效果；
         // 本次需要挂起时 suspend 会在同一 tick 内重新施加，客户端无感知
-        player.removePotionEffect(PotionEffectType.BLINDNESS);
+        clearLoginBlindness(player);
 
         // 更新活跃时间（有账号即更新，用于不活跃清理；未注册玩家不写库）
         authManager.touchActive(player);
@@ -182,11 +182,14 @@ public final class PlayerListener implements Listener {
             player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS,
                     PotionEffect.INFINITE_DURATION, 0, false, false, false));
         } else {
-            player.removePotionEffect(PotionEffectType.BLINDNESS);
+            clearLoginBlindness(player);
         }
     }
 
-    /** 登录/注册成功后移除登录失明 */
+    /**
+     * 移除登录失明：登录/注册成功、reload 关闭失明、加入时残留清理、
+     * 未登录退出四个场景共用此出口，效果类型改动只需修改一处。
+     */
     private void clearLoginBlindness(Player player) {
         player.removePotionEffect(PotionEffectType.BLINDNESS);
     }
@@ -419,7 +422,7 @@ public final class PlayerListener implements Listener {
             authManager.saveLogoutLocation(player);
         } else {
             // 未登录退出：移除登录失明，避免效果随 .dat 保存到下次会话
-            player.removePotionEffect(PotionEffectType.BLINDNESS);
+            clearLoginBlindness(player);
         }
         // 立即清理提醒 BossBar：玩家调度器随退出 retired，任务内的清理分支不再执行
         hideReminderBar(player);

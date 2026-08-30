@@ -87,7 +87,7 @@ public final class ConfigManager {
     // 同 IP 已满时，是否在连接阶段直接拒绝未注册新玩家进服（false=放行由注册动作判定）
     private boolean ipLimitRejectJoin;
 
-    // 行为限制
+    // 行为限制（protection.prevent 段）
     private boolean preventMove;
     private boolean preventLook;
     private boolean preventChat;
@@ -192,8 +192,8 @@ public final class ConfigManager {
         loadLoginConfig(config);
         loadPasswordConfig(config);
         loadRegisterConfig(config);
-        loadPreventConfig(config);
         loadProtectionConfig(config);
+        loadPearlConfig(config);
         loadPremiumConfig(config);
         loadMessageConfig(config);
 
@@ -367,23 +367,6 @@ public final class ConfigManager {
         this.ipLimitRejectJoin = config.getBoolean("register.max-accounts-per-ip.reject-join", true);
     }
 
-    // 行为限制（protection.prevent 段）
-    private void loadPreventConfig(FileConfiguration config) {
-        this.preventMove = config.getBoolean("protection.prevent.move", true);
-        this.preventLook = config.getBoolean("protection.prevent.look", true);
-        this.preventChat = config.getBoolean("protection.prevent.chat", true);
-        this.preventCommand = config.getBoolean("protection.prevent.command.enabled", true);
-        // 命令白名单统一转小写，匹配时大小写不敏感（固定 Locale.ROOT：突等区域设置下无点 i 变形会导致条目失配）
-        this.commandWhitelist = config.getStringList("protection.prevent.command.whitelist")
-                .stream()
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .map(s -> s.toLowerCase(Locale.ROOT))
-                .toList();
-        this.preventWorldInteraction = config.getBoolean("protection.prevent.world-interaction", true);
-        this.preventInventory = config.getBoolean("protection.prevent.inventory", true);
-    }
-
     // 登录前保护
     private void loadProtectionConfig(FileConfiguration config) {
         this.protectionPosEnabled = config.getBoolean("protection.pos.enabled", false);
@@ -411,7 +394,25 @@ public final class ConfigManager {
         // 登录前失明
         this.protectionBlindnessEnabled = config.getBoolean("protection.blindness", true);
 
-        // 末影珍珠保管与返还方式
+        // 行为限制（protection.prevent 段）
+        this.preventMove = config.getBoolean("protection.prevent.move", true);
+        this.preventLook = config.getBoolean("protection.prevent.look", true);
+        this.preventChat = config.getBoolean("protection.prevent.chat", true);
+        this.preventCommand = config.getBoolean("protection.prevent.command.enabled", true);
+        // 命令白名单统一转小写，匹配时大小写不敏感（固定 Locale.ROOT：突等区域设置下无点 i 变形会导致条目失配）
+        this.commandWhitelist = config.getStringList("protection.prevent.command.whitelist")
+                .stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.toLowerCase(Locale.ROOT))
+                .toList();
+        this.preventWorldInteraction = config.getBoolean("protection.prevent.world-interaction", true);
+        this.preventInventory = config.getBoolean("protection.prevent.inventory", true);
+
+    }
+
+    // 末影珍珠保管与返还
+    private void loadPearlConfig(FileConfiguration config) {
         this.pearlEnabled = config.getBoolean("pearl.enabled", true);
         this.pearlReturnMode = config.getString("pearl.return", "item");
         // 返还方式校验：仅支持 item/entity，非法值回退为 item
