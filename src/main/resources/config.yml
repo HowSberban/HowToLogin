@@ -112,29 +112,6 @@ password:
   # 密码字符规则：正则表达式，留空表示不限制
   pattern: '^[a-zA-Z0-9!@#$%^&*()\-_=+\[\]{}|;:,.<>?]+$'
 
-# 行为限制（登录前禁止的行为）
-prevent:
-  # 禁止移动
-  move: true
-  # 禁止转动视角（仅当 move 启用时生效）
-  look: true
-  # 禁止聊天
-  chat: true
-  # 禁止执行非白名单命令
-  command:
-    enabled: true
-    whitelist:
-      - login
-      - l
-      - register
-      - reg
-      - 2fa
-      - totp
-  # 禁止与世界交互
-  world-interaction: true
-  # 禁止背包交互
-  inventory: true
-
 # 登录前保护
 protection:
   # 坐标保护（未登录时在主世界出生点周围随机位置等待，登录后传送回上次退出位置）
@@ -156,9 +133,33 @@ protection:
   # 首次注册的玩家恢复为服务器默认模式（server.properties 的 level-default-gamemode）
   # 若坐标保护关闭且上次退出位置悬空，该玩家强制旁观，避免落地摔落伤害
   gamemode: false
+  # 登录前失明：未登录（含等待登录/注册/2FA）期间施加失明效果，登录/注册成功后自动移除
+  blindness: true
   # 背包保护：未登录玩家无法查看背包
   # 通过 PacketEvents 拦截物品数据包，防止恶意玩家窥视背包内容
   inventory: false
+  # 行为限制（登录前禁止的行为）
+  prevent:
+    # 禁止移动
+    move: true
+    # 禁止转动视角（仅当 move 启用时生效）
+    look: true
+    # 禁止聊天
+    chat: true
+    # 禁止执行非白名单命令
+    command:
+      enabled: true
+      whitelist:
+        - login
+        - l
+        - register
+        - reg
+        - 2fa
+        - totp
+    # 禁止与世界交互
+    world-interaction: true
+    # 禁止背包交互
+    inventory: true
 
 # 末影珍珠恢复
 # 玩家退出时移除飞行中的珍珠并记录，下次成功登录时返还

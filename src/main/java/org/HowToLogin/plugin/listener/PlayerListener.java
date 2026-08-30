@@ -7,9 +7,13 @@ import org.bukkit.Bukkit;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
+import org.howtologin.plugin.api.event.HTLoginLoginEvent;
+import org.howtologin.plugin.api.event.HTLoginRegisterEvent;
 import org.howtologin.plugin.dialog.PreJoinAuthListener;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -89,6 +93,11 @@ public final class PlayerListener implements Listener {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
+        // 清理上一会话残留的登录失明（药水效果随 .dat 保存，崩溃重连后仍在）；
+        // 本监听器最先注册，先于其它插件的 join 处理执行，不会误删后者施加的效果；
+        // 本次需要挂起时 suspend 会在同一 tick 内重新施加，客户端无感知
+        player.removePotionEffect(PotionEffectType.BLINDNESS);
+
         // 更新活跃时间（有账号即更新，用于不活跃清理；未注册玩家不写库）
         authManager.touchActive(player);
 
@@ -157,9 +166,46 @@ public final class PlayerListener implements Listener {
      */
     public void suspend(Player player, String messageKey, boolean needsLogin) {
         authManager.setSpectator(player);
+        applyLoginBlindness(player);
         player.sendMessage(I18n.msg(messageKey, player));
         scheduleReminder(player, needsLogin);
         scheduleLoginTimeout(player, needsLogin);
+    }
+
+    /**
+     * 登录前失明：开关开启则施加无限时长失明（无颗粒无图标，重复挂起幂等），
+     * 关闭则移除——reload 经 refreshPendingPlayers 重新挂起时按新配置双向同步，
+     * 已失明的玩家可被解除，无需额外的 reload 同步逻辑。
+     */
+    private void applyLoginBlindness(Player player) {
+        if (plugin.getConfigManager().protectionBlindnessEnabled()) {
+            player.addPotionEffect(new PotionEffect(PotionEffectType.BLINDNESS,
+                    PotionEffect.INFINITE_DURATION, 0, false, false, false));
+        } else {
+            player.removePotionEffect(PotionEffectType.BLINDNESS);
+        }
+    }
+
+    /** 登录/注册成功后移除登录失明 */
+    private void clearLoginBlindness(Player player) {
+        player.removePotionEffect(PotionEffectType.BLINDNESS);
+    }
+
+    /**
+     * 登录成功移除失明：/login 密码、2FA 验证完成、会话/正版免密 autoLogin、
+     * pre-join 登录收尾、管理员强制登录全部经 HTLoginLoginEvent（Folia 下在玩家区域线程触发）。
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onLoginSuccess(HTLoginLoginEvent event) {
+        clearLoginBlindness(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRegisterSuccess(HTLoginRegisterEvent event) {
+        // 强制注册离线玩家时 getPlayer() 为 null，此时也无可移除的失明
+        if (event.getPlayer() != null) {
+            clearLoginBlindness(event.getPlayer());
+        }
     }
 
     /**
@@ -371,6 +417,9 @@ public final class PlayerListener implements Listener {
         // 未登录玩家退出不更新位置，保持上次保存的位置不变
         if (authManager.isLoggedIn(player)) {
             authManager.saveLogoutLocation(player);
+        } else {
+            // 未登录退出：移除登录失明，避免效果随 .dat 保存到下次会话
+            player.removePotionEffect(PotionEffectType.BLINDNESS);
         }
         // 立即清理提醒 BossBar：玩家调度器随退出 retired，任务内的清理分支不再执行
         hideReminderBar(player);

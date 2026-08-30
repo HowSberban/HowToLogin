@@ -109,6 +109,8 @@ public final class ConfigManager {
     private boolean protectionGamemodeEnabled;
     // 背包保护：未登录期间通过 PacketEvents 拦截物品数据包，防止 mod 窥视
     private boolean protectionInventoryEnabled;
+    // 登录前失明：未登录（含等待登录/注册/2FA）期间施加失明效果，登录/注册成功后移除
+    private boolean protectionBlindnessEnabled;
     // 末影珍珠返还方式：item = 物品入包；entity = 世界原位重生飞行珍珠
     private String pearlReturnMode;
     // 末影珍珠保管开关（关闭后退出不接管珍珠，维持原版行为）
@@ -365,21 +367,21 @@ public final class ConfigManager {
         this.ipLimitRejectJoin = config.getBoolean("register.max-accounts-per-ip.reject-join", true);
     }
 
-    // 行为限制
+    // 行为限制（protection.prevent 段）
     private void loadPreventConfig(FileConfiguration config) {
-        this.preventMove = config.getBoolean("prevent.move", true);
-        this.preventLook = config.getBoolean("prevent.look", true);
-        this.preventChat = config.getBoolean("prevent.chat", true);
-        this.preventCommand = config.getBoolean("prevent.command.enabled", true);
+        this.preventMove = config.getBoolean("protection.prevent.move", true);
+        this.preventLook = config.getBoolean("protection.prevent.look", true);
+        this.preventChat = config.getBoolean("protection.prevent.chat", true);
+        this.preventCommand = config.getBoolean("protection.prevent.command.enabled", true);
         // 命令白名单统一转小写，匹配时大小写不敏感（固定 Locale.ROOT：突等区域设置下无点 i 变形会导致条目失配）
-        this.commandWhitelist = config.getStringList("prevent.command.whitelist")
+        this.commandWhitelist = config.getStringList("protection.prevent.command.whitelist")
                 .stream()
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .map(s -> s.toLowerCase(Locale.ROOT))
                 .toList();
-        this.preventWorldInteraction = config.getBoolean("prevent.world-interaction", true);
-        this.preventInventory = config.getBoolean("prevent.inventory", true);
+        this.preventWorldInteraction = config.getBoolean("protection.prevent.world-interaction", true);
+        this.preventInventory = config.getBoolean("protection.prevent.inventory", true);
     }
 
     // 登录前保护
@@ -405,6 +407,9 @@ public final class ConfigManager {
 
         // 背包保护（PacketEvents 数据包拦截）
         this.protectionInventoryEnabled = config.getBoolean("protection.inventory", false);
+
+        // 登录前失明
+        this.protectionBlindnessEnabled = config.getBoolean("protection.blindness", true);
 
         // 末影珍珠保管与返还方式
         this.pearlEnabled = config.getBoolean("pearl.enabled", true);
@@ -635,6 +640,9 @@ public final class ConfigManager {
 
     // 背包保护（PacketEvents 数据包拦截）
     public boolean protectionInventoryEnabled() { return protectionInventoryEnabled; }
+
+    // 登录前失明
+    public boolean protectionBlindnessEnabled() { return protectionBlindnessEnabled; }
 
     // 末影珍珠保管开关
     public boolean pearlEnabled() { return pearlEnabled; }
