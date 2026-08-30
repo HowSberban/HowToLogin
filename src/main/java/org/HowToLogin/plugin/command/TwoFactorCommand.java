@@ -200,10 +200,12 @@ public final class TwoFactorCommand {
                 .clickEvent(ClickEvent.copyToClipboard(content));
     }
 
-    /** 可点击打开扫码网页的组件：金色文本，点击在浏览器打开二维码页 */
+    /**
+     * 可点击打开扫码网页的组件：前缀（"或者直接"）无色，"扫描二维码添加"金色——
+     * 颜色由语言文件内嵌 &6 控制，此处不再整段强制上色，避免把无色前缀也染成金色
+     */
     private static Component clickToOpen(String url, Player player) {
         return msg(player, "2fa.setup_scan")
-                .color(DialogManager.HIGHLIGHT_COLOR)
                 .hoverEvent(HoverEvent.showText(msg(player, "2fa.click_to_open")))
                 .clickEvent(ClickEvent.openUrl(url));
     }
