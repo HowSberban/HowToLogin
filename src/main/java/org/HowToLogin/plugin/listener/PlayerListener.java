@@ -228,7 +228,7 @@ public final class PlayerListener implements Listener {
     public void beginAuthFlow(Player player) {
         boolean hasAccount = authManager.hasAccount(player);
         UUID uuid = player.getUniqueId();
-        // 无密码账户：验证码是唯一登录因素，直接进入待验证状态
+        // 无密码账户：密码不是登录因素，已绑定验证器时验证码成为唯一登录方式
         boolean passwordless = hasAccount && authManager.isPasswordless(uuid);
         if (hasAccount) {
             authManager.addPendingLogin(player);
@@ -244,7 +244,11 @@ public final class PlayerListener implements Listener {
                 authManager.returnToLogoutLocation(player);
                 return;
             }
-            authManager.addPending2fa(uuid);
+            // 仅已绑定验证器的账户进入待验证码状态：无凭据账户（无密码+无2FA+非正版）无码可验，
+            // 不设待验证状态，提示自然落到 authPromptKey 的 passwordless_no_auth（联系管理员）
+            if (authManager.hasTotpSecret(uuid)) {
+                authManager.addPending2fa(uuid);
+            }
         }
         // 无可用登录方式（reject-no-auth-account=false 放行进入的兜底场景，无凭据永远验不过）：
         // WARN 记录供管理员排查，提示玩家联系管理员而非空输验证码（hasNoUsableLoginMethod 已含无密码判定）
