@@ -15,7 +15,7 @@
 - 经过测试的服务端：1.21.11，26.1.x，包括 Paper 与 Folia.
 
 ## 下载
-- **GitHub Releases**
+- [GitHub Releases](https://github.com/HowSberban/HowToLogin/releases)
 
 ## 依赖
 
