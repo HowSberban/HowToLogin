@@ -66,7 +66,6 @@ class LongRunStabilityTest {
 
     private static ServerMock server;
     private static HTLogin plugin;
-    private static ConfigManager config;
     private static PlayerDataManager data;
     private static AuthManager auth;
 
@@ -84,7 +83,7 @@ class LongRunStabilityTest {
         inject(JavaPlugin.class, "logger", plugin, Logger.getLogger("HTLoginTest"));
         // 与 onEnable 次序一致：I18n 先于 ConfigManager 初始化（配置版本检查/日志使用 I18n）
         I18n.init(plugin);
-        config = new ConfigManager(plugin);
+        ConfigManager config = new ConfigManager(plugin);
         // 压测参数：bcrypt cost 取 12（贴近生产强度，验证真实哈希负载下的稳定性）；IP 上限调小便于并发断言；
         // failProtection 关闭——多轮密码/2FA 错误码验证会累积失败计数触发踢出，干扰成功率类断言（踢出路径抽离）
         inject(ConfigManager.class, "bcryptCost", config, 12);
@@ -506,14 +505,12 @@ class LongRunStabilityTest {
         field.set(target, value);
     }
 
-    @SuppressWarnings("unchecked")
     private static int collectionSize(Object target, String fieldName) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return ((Collection<?>) field.get(target)).size();
     }
 
-    @SuppressWarnings("unchecked")
     private static int mapSize(Object target, String fieldName) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
