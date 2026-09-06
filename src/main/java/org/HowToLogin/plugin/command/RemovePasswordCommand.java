@@ -30,7 +30,7 @@ public final class RemovePasswordCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(I18n.msg("removepassword.must_login", player));
+            player.sendMessage(I18n.msg("listener.must_login", player));
             return;
         }
 

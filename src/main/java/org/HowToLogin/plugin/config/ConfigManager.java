@@ -203,6 +203,7 @@ public final class ConfigManager {
 
         // 通用设置
         this.realUnreg = config.getBoolean("settings.real-unreg", true);
+        this.allowSelfUnregister = config.getBoolean("settings.allow-self-unregister", true);
         this.purgeEnabled = config.getBoolean("settings.purge.enabled", false);
         this.purgeDays = clampInt("settings.purge.days", config.getInt("settings.purge.days", 90), 1);
 

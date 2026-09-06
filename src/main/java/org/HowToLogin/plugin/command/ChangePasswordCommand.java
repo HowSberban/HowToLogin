@@ -29,7 +29,7 @@ public final class ChangePasswordCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(I18n.msg("changepw.must_login", player));
+            player.sendMessage(I18n.msg("listener.must_login", player));
             return;
         }
 

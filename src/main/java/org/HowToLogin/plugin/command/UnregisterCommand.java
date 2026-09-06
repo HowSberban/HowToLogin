@@ -43,7 +43,7 @@ public final class UnregisterCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(I18n.msg("unregister.must_login", player));
+            player.sendMessage(I18n.msg("listener.must_login", player));
             return;
         }
 
@@ -93,7 +93,8 @@ public final class UnregisterCommand implements BasicCommand {
                 code = args[0];
             } else {
                 password = args[0];
-                if (has2fa && args.length > 1) code = args[1];
+                // 参数个数检查已保证 has2fa 时有第二个参数
+                if (has2fa) code = args[1];
             }
         }
 

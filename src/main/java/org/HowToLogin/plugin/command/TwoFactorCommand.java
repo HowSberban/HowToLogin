@@ -87,7 +87,7 @@ public final class TwoFactorCommand {
             return true;
         }
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(msg(player, "2fa.must_login"));
+            player.sendMessage(msg(player, "listener.must_login"));
             return true;
         }
         return false;

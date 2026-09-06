@@ -30,7 +30,7 @@ public final class AddPasswordCommand implements BasicCommand {
         }
 
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(I18n.msg("addpassword.must_login", player));
+            player.sendMessage(I18n.msg("listener.must_login", player));
             return;
         }
 

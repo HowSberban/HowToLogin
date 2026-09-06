@@ -34,7 +34,7 @@ public final class UpgradeAccountCommand implements BasicCommand {
             return;
         }
         if (!authManager.isLoggedIn(player)) {
-            player.sendMessage(I18n.msg("upgrade.must_login", player));
+            player.sendMessage(I18n.msg("listener.must_login", player));
             return;
         }
         if (authManager.isPremium(player)) {
