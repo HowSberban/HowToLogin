@@ -98,6 +98,18 @@ public final class PreJoinAuthListener implements Listener {
             outcomes.remove(uuid);
             authManager.clearPending2fa(uuid);
         }
+        // 无凭据账号（无密码、未绑 2FA、非正版）：配置阶段先行处理。
+        // AsyncPlayerConnectionConfigureEvent 早于 onPreLogin 的 AsyncPlayerPreLoginEvent，
+        // 弹窗验证会卡死到超时（reject 开关在 dialog 场景轮不到），此处与连接层拦截口径一致：
+        if (uuid != null && authManager.hasAccount(uuid)
+                && authManager.hasNoUsableLoginMethod(uuid)) {
+            if (plugin.getConfigManager().rejectNoAuthAccount()) {
+                conn.disconnect(I18n.msgForLocale("prelogin.account_locked", resolveLocale(conn)));
+                return;
+            }
+            // 放行：跳过验证窗口（无凭据永远验不过），由 onJoin 的 beginAuthFlow 挂起至超时踢出
+            return;
+        }
         if (!plugin.getConfigManager().loginDialogEnabled()) return;
         // 已登录（reconfigure 场景）直接放行
         if (uuid == null || authManager.isLoggedIn(uuid)) return;
@@ -109,9 +121,9 @@ public final class PreJoinAuthListener implements Listener {
         if (!authManager.requires2faAtLogin(uuid, ip)) {
             // 免密（正版非回退/IP 会话命中）：放行，由 onJoin 现有免密分支收尾
             if (autoLogin) return;
-            // 无密码账户 2FA 会话命中：记 outcome 走 finishPreJoinLogin 收尾
-            // （onJoin 无对应免密分支，出生点决策也依赖 hasCompleted 直接在退出位置出生）
-            if (authManager.isPasswordless(uuid)) {
+            // 无密码账户：仅 2FA 会话命中时免验证码直接登录。无密钥账户不能满足 has2faSession，
+            // 不会放行，进入下方验证码窗口等待（永远无法通过，超时断连）
+            if (authManager.isPasswordless(uuid) && authManager.has2faSession(uuid, ip)) {
                 outcomes.put(uuid, AuthOutcome.LOGIN);
                 return;
             }

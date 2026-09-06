@@ -136,6 +136,9 @@ protection:
   gamemode: false
   # 登录前失明：未登录（含等待登录/注册/2FA）期间施加失明效果，登录/注册成功后自动移除
   blindness: true
+  # 无凭据账号拦截：有账号但未设密码、未绑验证器且非正版的玩家，任何认证路径都不可行
+  # true = 连接阶段直接拒绝进入（默认）；false = 放行进服挂起（仍无法完成登录，超时会被踢出）
+  reject-no-auth-account: true
   # 背包保护：未登录玩家无法查看背包
   # 通过 PacketEvents 拦截物品数据包，防止恶意玩家窥视背包内容
   inventory: false

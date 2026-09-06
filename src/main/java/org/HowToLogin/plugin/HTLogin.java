@@ -27,7 +27,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-public final class HTLogin extends JavaPlugin {
+// 非 final：MockBukkit 需用 ByteBuddy 代理子类化插件类，才能以合法类加载器构造实例用于单元测试
+public class HTLogin extends JavaPlugin {
 
     private ConfigManager configManager;
     private PlayerDataManager playerDataManager;

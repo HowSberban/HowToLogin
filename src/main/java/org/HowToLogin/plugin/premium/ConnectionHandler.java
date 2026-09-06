@@ -139,10 +139,9 @@ public final class ConnectionHandler extends PacketListenerAbstract {
 
         // 4. 已注册正版玩家且回退标记有效（上次验证失败/离线启动器断开）：
         //    跳过加密握手，直接以正版 UUID 进入并用密码登录（复用离线标记机制，避免死循环踢出）
-        //    无密码账户无密码可验，不回退，走正常正版验证（失败即踢出）
+        //    无密码账户无密码可验，是否回退由 premiumFallbackAllowed（含 reject-no-auth-account 开关）决定
         if (profile.exists() && profile.premium()
-                && config.premiumPasswordFallbackEnabled()
-                && !authManager.isPasswordless(profile.uuid())
+                && premiumFallbackAllowed(profile.uuid())
                 && dataService.isPremiumFallbackConfirmed(ip, username)) {
             plugin.getLogger().info(I18n.get("log.premium_fallback_login", username, ip));
             event.setCancelled(true);
@@ -289,12 +288,11 @@ public final class ConnectionHandler extends PacketListenerAbstract {
                             // 升级尝试回退为离线账号，清除升级标记，玩家重进后按离线登录
                             authManager.clearUpgradePending(session.offlineUuid());
                         }
-                        // 正版验证失败回退：数据库正版账号且配置开启时，放行以正版 UUID 进入，
-                        // 用密码登录（继承正版数据），下次正版验证成功即自动免密
-                        // 无密码账户无密码可验，不回退，直接踢出
+                        // 正版验证失败回退：数据库正版账号且允许回退时，放行以正版 UUID 进入，
+                        // 用密码登录（继承正版数据），下次正版验证成功即自动免密。
+                        // 无密码账户是否回退由 premiumFallbackAllowed（含 reject-no-auth-account 开关）决定
                         PlayerData premiumData = premiumAccountByName(session, username);
-                        if (premiumData != null && plugin.getConfigManager().premiumPasswordFallbackEnabled()
-                                && !authManager.isPasswordless(premiumData.uuid())) {
+                        if (premiumData != null && premiumFallbackAllowed(premiumData.uuid())) {
                             authManager.markPremiumFallback(premiumData.uuid());
                             proceedWithLogin(channel, user, session, premiumData.uuid(), username, premiumData.properties());
                             return;
@@ -384,6 +382,15 @@ public final class ConnectionHandler extends PacketListenerAbstract {
             return addr.getAddress().getHostAddress();
         }
         return null;
+    }
+
+    /**
+     * 正版账户是否允许密码回退：回退开关开启，且（有密码，或无密码但拒绝开关关闭——放行无凭据玩家）。
+     * LoginStart 离线标记回退与 hasJoined 验证失败回退两处共用，保持同一口径。
+     */
+    private boolean premiumFallbackAllowed(UUID uuid) {
+        return plugin.getConfigManager().premiumPasswordFallbackEnabled()
+                && (!authManager.isPasswordless(uuid) || !plugin.getConfigManager().rejectNoAuthAccount());
     }
 
     /**

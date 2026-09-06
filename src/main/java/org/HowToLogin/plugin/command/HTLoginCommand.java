@@ -99,6 +99,11 @@ public final class HTLoginCommand {
                                 .suggests(SUGGEST_ALL_PLAYERS)
                                 .then(argument("newpassword", StringArgumentType.word())
                                         .executes(this::handleForceChangePw))))
+                // /htlogin forcermpw <player>：管理员强制清空玩家密码（转为无密码账户，凭正版验证或 2FA 登录）
+                .then(literal("forcermpw")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_ALL_PLAYERS)
+                                .executes(this::handleForceRemovePw)))
                 // /htlogin forcelogin <player>
                 .then(literal("forcelogin")
                         .then(argument("player", StringArgumentType.word())
@@ -110,6 +115,11 @@ public final class HTLoginCommand {
                                 .suggests(SUGGEST_PLAYERS)
                                 .then(argument("password", StringArgumentType.word())
                                         .executes(this::handleForceRegister))))
+                // /htlogin reset2fa <player>：管理员强制解除 2FA 绑定（玩家误删验证器密钥时解锁）
+                .then(literal("reset2fa")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_ALL_PLAYERS)
+                                .executes(this::handleReset2fa)))
                 .build();
     }
 
@@ -145,8 +155,8 @@ public final class HTLoginCommand {
 
         // 异步执行：getOfflinePlayer 可能阻塞网络查询（Folia 兼容）
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
-            PlayerData data = plugin.getPlayerDataManager().getPlayer(target.getUniqueId());
+            UUID targetUuid = resolveTargetUuid(targetName);
+            PlayerData data = plugin.getPlayerDataManager().getPlayer(targetUuid);
             if (data == null) {
                 sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
                 return;
@@ -161,7 +171,7 @@ public final class HTLoginCommand {
             List<PlayerData> sameIpAccounts = plugin.getPlayerDataManager().findByIp(ip);
             // 排除目标玩家自身，输出其他账号名
             List<String> otherNames = sameIpAccounts.stream()
-                    .filter(d -> !d.uuid().equals(target.getUniqueId()))
+                    .filter(d -> !d.uuid().equals(targetUuid))
                     .map(d -> {
                         OfflinePlayer op = Bukkit.getOfflinePlayer(d.uuid());
                         return op.getName() != null ? op.getName() : d.uuid().toString();
@@ -182,8 +192,7 @@ public final class HTLoginCommand {
         String targetName = StringArgumentType.getString(ctx, "player");
         // 异步解析 UUID（Folia 兼容）
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
-            boolean success = plugin.getAuthManager().forceLogout(target.getUniqueId());
+            boolean success = plugin.getAuthManager().forceLogout(resolveTargetUuid(targetName));
             if (success) {
                 sender.sendMessage(I18n.msg("htlogin.forcelogout_success", sender, targetName));
                 // 在线玩家踢出以重新登录
@@ -205,17 +214,8 @@ public final class HTLoginCommand {
         String newPassword = StringArgumentType.getString(ctx, "newpassword");
         if (PasswordValidator.invalidPattern(plugin, sender, newPassword)) return Command.SINGLE_SUCCESS;
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
-            AuthManager auth = plugin.getAuthManager();
-            UUID uuid = target.getUniqueId();
-            // 离线 UUID 无账号时，尝试按名字解析正版账号（premium=1）。
-            // 正版玩家在数据库中为正版 UUID，而 getOfflinePlayer 在 offline-mode 服务端返回离线 UUID，
-            // 两者不匹配，否则 forcechangepw 对正版玩家永远报"账号不存在"
-            if (!plugin.getPlayerDataManager().hasAccount(uuid)) {
-                PlayerData premium = plugin.getPlayerDataManager().getByName(targetName);
-                if (premium != null) uuid = premium.uuid();
-            }
-            if (!auth.forceChangePassword(uuid, newPassword)) {
+            UUID uuid = resolveTargetUuid(targetName);
+            if (!plugin.getAuthManager().forceChangePassword(uuid, newPassword)) {
                 sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
                 return;
             }
@@ -227,6 +227,32 @@ public final class HTLoginCommand {
             }
         });
         return Command.SINGLE_SUCCESS;
+    }
+
+    /** 强制清空密码：转为无密码账户（凭正版验证或 2FA 登录）。玩家在线或离线均可，无需验证码 */
+    private int handleForceRemovePw(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            if (!plugin.getAuthManager().forceRemovePassword(resolveTargetUuid(targetName))) {
+                sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
+                return;
+            }
+            sender.sendMessage(I18n.msg("htlogin.forcermpw_success", sender, targetName));
+        });
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** 解析命令目标账号：优先离线 UUID，无账号时按名字匹配正版账号（premium=1 存储正版 UUID） */
+    private UUID resolveTargetUuid(String targetName) {
+        UUID uuid = Bukkit.getOfflinePlayer(targetName).getUniqueId();
+        // 离线模式下 getOfflinePlayer 返回离线 UUID，与正版账号存储的正版 UUID 不匹配，
+        // 不回溯会对正版玩家误报"账号不存在"
+        if (!plugin.getPlayerDataManager().hasAccount(uuid)) {
+            PlayerData premium = plugin.getPlayerDataManager().getByName(targetName);
+            if (premium != null) uuid = premium.uuid();
+        }
+        return uuid;
     }
 
     // 强制登录：仅对在线玩家生效
@@ -257,9 +283,7 @@ public final class HTLoginCommand {
         String password = StringArgumentType.getString(ctx, "password");
         if (PasswordValidator.invalidPattern(plugin, sender, password)) return Command.SINGLE_SUCCESS;
         Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            OfflinePlayer target = Bukkit.getOfflinePlayer(targetName);
-            AuthManager auth = plugin.getAuthManager();
-            if (!auth.forceRegister(target.getUniqueId(), targetName, password)) {
+            if (!plugin.getAuthManager().forceRegister(resolveTargetUuid(targetName), targetName, password)) {
                 sender.sendMessage(I18n.msg("htlogin.forceregister_already_exists", sender, targetName));
                 return;
             }
@@ -267,9 +291,23 @@ public final class HTLoginCommand {
             // 在线玩家：切换为待登录状态，重启登录提醒和超时任务（注册提醒会因 hasAccount=true 自动取消）
             Player online = Bukkit.getPlayerExact(targetName);
             if (online != null) {
-                auth.addPendingLogin(online);
+                plugin.getAuthManager().addPendingLogin(online);
                 // 复用通用挂起：补旁观者保护（登录成功后按存储模式恢复游戏模式）
                 plugin.getPlayerListener().suspend(online, "listener.please_login", true);
+            }
+        });
+        return Command.SINGLE_SUCCESS;
+    }
+
+    // 强制解除 2FA：管理员救济通道（玩家误删验证器密钥致账号锁死时解锁），解除后玩家可重新 /2fa setup
+    private int handleReset2fa(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            if (plugin.getAuthManager().reset2fa(resolveTargetUuid(targetName))) {
+                sender.sendMessage(I18n.msg("htlogin.reset2fa_success", sender, targetName));
+            } else {
+                sender.sendMessage(I18n.msg("htlogin.reset2fa_not_enabled", sender, targetName));
             }
         });
         return Command.SINGLE_SUCCESS;

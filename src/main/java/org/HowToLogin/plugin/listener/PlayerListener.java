@@ -69,6 +69,15 @@ public final class PlayerListener implements Listener {
             return;
         }
 
+        // 有账号但无任何可用登录方式（无密码/未绑 2FA/非正版）。
+        // 配置开启时在连接阶段直接拦截；关闭时放行，由 beginAuthFlow 挂起（永远无法通过，超时踢出）
+        if (plugin.getConfigManager().rejectNoAuthAccount()
+                && authManager.hasNoUsableLoginMethod(uuid)) {
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER,
+                    I18n.msg("prelogin.account_locked"));
+            return;
+        }
+
         // 注销后 5 秒内拒绝重连，确保 .dat 删除完成
         if (authManager.isRecentlyUnregistered(uuid)) {
             long remaining = authManager.getRecentUnregisterRemaining(uuid);
@@ -218,27 +227,45 @@ public final class PlayerListener implements Listener {
      */
     public void beginAuthFlow(Player player) {
         boolean hasAccount = authManager.hasAccount(player);
+        UUID uuid = player.getUniqueId();
         // 无密码账户：验证码是唯一登录因素，直接进入待验证状态
-        boolean passwordless = hasAccount && authManager.isPasswordless(player.getUniqueId());
+        boolean passwordless = hasAccount && authManager.isPasswordless(uuid);
         if (hasAccount) {
             authManager.addPendingLogin(player);
         }
         if (passwordless) {
             String ip = AuthManager.clientIp(player);
-            if (!authManager.requires2faAtLogin(player.getUniqueId(), ip)) {
-                // 2FA 会话命中：免验证码直接登录（Dialog 未覆盖时的回退路径）
+            // 仅 2FA 会话命中（同 IP 且未过期）时免验证码登录：无密钥账户否则会因
+            // requires2faAtLogin 判空短路被 autoLogin 免密直入（认证绕过），必须显式判定
+            if (authManager.has2faSession(uuid, ip)) {
                 // 走到这里说明 login.session 未命中，出生点在保护位置，登录后须传送回退出位置
                 authManager.autoLogin(player);
                 player.sendMessage(I18n.msg("login.success", player));
                 authManager.returnToLogoutLocation(player);
                 return;
             }
-            authManager.addPending2fa(player.getUniqueId());
+            authManager.addPending2fa(uuid);
         }
-        suspend(player,
-                passwordless ? "login.passwordless_prompt"
-                        : hasAccount ? "listener.please_login" : "listener.please_register",
-                hasAccount);
+        // 无可用登录方式（reject-no-auth-account=false 放行进入的兜底场景，无凭据永远验不过）：
+        // WARN 记录供管理员排查，提示玩家联系管理员而非空输验证码（hasNoUsableLoginMethod 已含无密码判定）
+        if (authManager.hasNoUsableLoginMethod(uuid)) {
+            plugin.getLogger().warning(I18n.get("log.passwordless_no_auth_account",
+                    player.getName(), AuthManager.clientIp(player)));
+        }
+        suspend(player, authPromptKey(uuid, hasAccount), hasAccount);
+    }
+
+    /**
+     * 挂起提示文案选择：首次挂起与周期提醒共用，防止两类提示口径不一致。
+     * 注册 → 待 2FA → 无密码（无可用登录方式细分联系管理员）→ 密码登录。
+     */
+    private String authPromptKey(UUID uuid, boolean needsLogin) {
+        if (!needsLogin) return "listener.please_register";
+        if (authManager.isPending2fa(uuid)) return "login.need_2fa";
+        return authManager.isPasswordless(uuid)
+                ? (authManager.hasNoUsableLoginMethod(uuid)
+                        ? "login.passwordless_no_auth" : "login.passwordless_prompt")
+                : "listener.please_login";
     }
 
     /**
@@ -280,11 +307,8 @@ public final class PlayerListener implements Listener {
 
     /** 按配置方式发送登录/注册提醒（bossbar 引用统一由 reminderBars 持有） */
     private void sendReminder(Player player, boolean needsLogin) {
-        // 无密码账户提醒输入验证码而非密码；已过密码待 2FA 的提醒输入验证码
-        String key = !needsLogin ? "listener.please_register"
-                : authManager.isPending2fa(player.getUniqueId()) ? "login.need_2fa"
-                : authManager.isPasswordless(player.getUniqueId()) ? "login.passwordless_prompt"
-                : "listener.please_login";
+        // 提示文案与首次挂起共用同一选择逻辑（authPromptKey），保证周期提醒口径一致
+        String key = authPromptKey(player.getUniqueId(), needsLogin);
         String method = plugin.getConfigManager().loginRemindMethod();
         switch (method) {
             case "title" -> player.showTitle(net.kyori.adventure.title.Title.title(

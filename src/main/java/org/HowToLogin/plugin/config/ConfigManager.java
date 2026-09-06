@@ -111,6 +111,8 @@ public final class ConfigManager {
     private boolean protectionInventoryEnabled;
     // 登录前失明：未登录（含等待登录/注册/2FA）期间施加失明效果，登录/注册成功后移除
     private boolean protectionBlindnessEnabled;
+    // 无凭据账号（无密码、未绑 2FA、非正版）是否在连接阶段拒绝进入；关闭则放行进服挂起（无法完成登录，超时踢出）
+    private boolean rejectNoAuthAccount;
     // 末影珍珠返还方式：item = 物品入包；entity = 世界原位重生飞行珍珠
     private String pearlReturnMode;
     // 末影珍珠保管开关（关闭后退出不接管珍珠，维持原版行为）
@@ -393,6 +395,7 @@ public final class ConfigManager {
 
         // 登录前失明
         this.protectionBlindnessEnabled = config.getBoolean("protection.blindness", true);
+        this.rejectNoAuthAccount = config.getBoolean("protection.reject-no-auth-account", true);
 
         // 行为限制（protection.prevent 段）
         this.preventMove = config.getBoolean("protection.prevent.move", true);
@@ -644,6 +647,7 @@ public final class ConfigManager {
 
     // 登录前失明
     public boolean protectionBlindnessEnabled() { return protectionBlindnessEnabled; }
+    public boolean rejectNoAuthAccount() { return rejectNoAuthAccount; }
 
     // 末影珍珠保管开关
     public boolean pearlEnabled() { return pearlEnabled; }

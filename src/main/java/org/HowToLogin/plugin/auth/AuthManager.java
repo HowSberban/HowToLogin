@@ -445,6 +445,11 @@ public final class AuthManager {
         return data != null && data.totpSecret() != null;
     }
 
+    /** 是否无可用登录方式：无密码、未绑验证器且非正版（正版可免密），任何认证路径都不可行 */
+    public boolean hasNoUsableLoginMethod(UUID uuid) {
+        return isPasswordless(uuid) && !hasTotpSecret(uuid) && !isPremium(uuid);
+    }
+
     /** 登录时是否必须完成 2FA 验证：已绑定密钥且（全局开关开启，或无密码账户——验证码是其必要登录因素，不受开关影响）。
      *  2FA 会话命中（同 IP 且未过期）时返回 false 免验证码 */
     public boolean requires2faAtLogin(UUID uuid, String ip) {
@@ -590,8 +595,30 @@ public final class AuthManager {
         if (data == null || data.totpSecret() == null) return false;
         if (!Totp.verifyCode(data.totpSecret(), code)) return false;
         data.totpSecret(null);
+        // 解绑后待验证标记已无意义，清除避免残留（残留会让玩家在密码窗口卡死/状态泄漏至下次退出）
+        pending2fa.remove(uuid);
         used2faCounters.remove(uuid);
-        dataManager.save(uuid);
+        // 关键操作立即持久化，防止断电丢失
+        dataManager.saveNow(uuid);
+        return true;
+    }
+
+    /**
+     * 管理员强制解除双因素认证：不校验验证码（玩家可能已丢失验证器密钥导致账号锁死的救济通道），
+     * 仅清除 TOTP 密钥与会话/计数/待确认状态，保留账号其余数据（密码、正版标记、位置等）。
+     * 绑定中返回 true；账号不存在或未绑定时返回 false。
+     */
+    public boolean reset2fa(UUID uuid) {
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null || data.totpSecret() == null) return false;
+        data.totpSecret(null);
+        // 管理员解除同样使待验证状态失效，一并清理（语义与 disable2fa 一致）
+        pending2fa.remove(uuid);
+        used2faCounters.remove(uuid);
+        clear2faSession(uuid);
+        clearPending2faSecret(uuid);
+        // 关键操作立即持久化，防止断电丢失
+        dataManager.saveNow(uuid);
         return true;
     }
 
@@ -671,7 +698,20 @@ public final class AuthManager {
         if (!dataManager.hasAccount(uuid)) return false;
         String newHash = PasswordHash.hashPassword(newPassword, configManager.passwordHashAlgorithm(), configManager.bcryptCost());
         dataManager.updatePassword(uuid, newHash);
-        // 清除 lastLogin 使登录会话立即失效，强制下次必须用密码登录
+        invalidateLoginSessions(uuid);
+        return true;
+    }
+
+    /** 管理员强制清空玩家密码（转为无密码账户）：无需验证旧密码或 2FA 验证码，玩家无需在线 */
+    public boolean forceRemovePassword(UUID uuid) {
+        if (!dataManager.hasAccount(uuid)) return false;
+        dataManager.updatePassword(uuid, "");
+        invalidateLoginSessions(uuid);
+        return true;
+    }
+
+    /** 凭据变更后使登录会话失效：清除 lastLogin（免密窗口）与登录/2FA 会话，强制下次重新验证 */
+    private void invalidateLoginSessions(UUID uuid) {
         PlayerData data = dataManager.getPlayer(uuid);
         if (data != null) {
             data.lastLogin(0);
@@ -679,7 +719,6 @@ public final class AuthManager {
         }
         clearLoginSession(uuid);
         clear2faSession(uuid);
-        return true;
     }
 
     /** 强制登录玩家（不管有没有账号，仅对在线玩家生效） */

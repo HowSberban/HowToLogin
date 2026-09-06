@@ -217,6 +217,15 @@ public final class PlayerDataManager {
         }
     }
 
+    /**
+     * 立即落库指定玩家（关键操作专用：注册、改密、2FA 绑定状态变更等防断电丢失）。
+     * 经串行写队列直写，失败时兜底转交周期 flush 重试
+     */
+    public void saveNow(UUID uuid) {
+        PlayerData data = players.get(uuid);
+        if (data != null) saveNow(data);
+    }
+
     /** 周期任务调用（已在异步调度线程）：将脏标记的玩家数据批量落库，失败按上限重试 */
     public void flushDirty() {
         if (dirty.isEmpty()) return;
