@@ -8,7 +8,6 @@ import com.mojang.brigadier.tree.LiteralCommandNode;
 
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
-import org.howtologin.plugin.auth.AuthManager;
 import org.howtologin.plugin.auth.PasswordValidator;
 import org.howtologin.plugin.data.PlayerDataManager.PlayerData;
 import org.bukkit.Bukkit;

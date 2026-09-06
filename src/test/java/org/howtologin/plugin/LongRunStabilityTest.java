@@ -27,6 +27,7 @@ import org.mockbukkit.mockbukkit.MockBukkit;
 import org.mockbukkit.mockbukkit.ServerMock;
 import org.mockbukkit.mockbukkit.entity.PlayerMock;
 import org.mockbukkit.mockbukkit.world.WorldMock;
+import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -68,11 +69,10 @@ class LongRunStabilityTest {
     private static ConfigManager config;
     private static PlayerDataManager data;
     private static AuthManager auth;
-    private static Path tempDir;
 
     @BeforeAll
     static void bootstrap() throws Exception {
-        tempDir = Files.createTempDirectory("htlogin-stab-test");
+        Path tempDir = Files.createTempDirectory("htlogin-stab-test");
         // 自定义 ServerMock：补 GlobalRegionScheduler 实现（生产代码在异步线程触发同步事件时依赖它，
         // MockBukkit 默认未实现，缺它会抛 UnimplementedOperationException 导致异步回调丢失、压测假死）
         server = MockBukkit.mock(new TestServerMock());
@@ -115,8 +115,8 @@ class LongRunStabilityTest {
     @Order(1)
     void ipLimitConcurrentNoBypass() throws Exception {
         String ip = "10.0.0.77";
-        ExecutorService pool = Executors.newFixedThreadPool(8);
-        try {
+        // AutoCloseable（Java 19+）：块结束自动 shutdown，无需手工关闭
+        try (ExecutorService pool = Executors.newFixedThreadPool(8)) {
             List<Callable<Boolean>> tasks = new ArrayList<>();
             for (int i = 0; i < 40; i++) {
                 UUID uuid = UUID.randomUUID();
@@ -130,8 +130,6 @@ class LongRunStabilityTest {
             }
             assertTrue(ok >= 1, "并发注册应至少成功 1 个");
             assertTrue(ok <= 3, "IP 上限被并发穿透: 成功 " + ok + " > 3");
-        } finally {
-            pool.shutdownNow();
         }
     }
 
@@ -142,10 +140,9 @@ class LongRunStabilityTest {
     void longRunConcurrentBusinessConverges() throws Exception {
         int threads = 3;
         int roundsEach = 16; // 3*16 = 48 个账号的完整生命周期
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
         AtomicInteger registered = new AtomicInteger();
         AtomicInteger errors = new AtomicInteger();
-        try {
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
             List<Future<?>> results = new ArrayList<>();
             for (int t = 0; t < threads; t++) {
                 final int tid = t;
@@ -179,7 +176,7 @@ class LongRunStabilityTest {
                             }
                         } catch (Throwable ex) {
                             errors.incrementAndGet();
-                            ex.printStackTrace();
+                            plugin.getLogger().log(java.util.logging.Level.SEVERE, "业务循环异常: " + name, ex);
                         }
                     }
                 }));
@@ -187,8 +184,6 @@ class LongRunStabilityTest {
             for (Future<?> f : results) {
                 f.get(600, TimeUnit.SECONDS);
             }
-        } finally {
-            pool.shutdownNow();
         }
 
         // 最终收敛：flush 两轮后不应再有脏数据
@@ -272,10 +267,9 @@ class LongRunStabilityTest {
         for (int i = 0; i < n; i++) {
             uuids[i] = UUID.randomUUID();
         }
-        ExecutorService pool = Executors.newFixedThreadPool(n);
         CountDownLatch gate = new CountDownLatch(1);
         List<Future<Boolean>> futures = new ArrayList<>();
-        try {
+        try (ExecutorService pool = Executors.newFixedThreadPool(n)) {
             for (int i = 0; i < n; i++) {
                 final int idx = i;
                 futures.add(pool.submit(() -> {
@@ -289,8 +283,6 @@ class LongRunStabilityTest {
                 if (f.get(60, TimeUnit.SECONDS)) ok++;
             }
             assertEquals(n, ok, "同时注册应全部成功");
-        } finally {
-            pool.shutdownNow();
         }
         // 抽测 3 人真实登录（cost=12 校验链）
         for (int i = 0; i < 3; i++) {
@@ -314,13 +306,12 @@ class LongRunStabilityTest {
             ghostUuids.add(UUID.randomUUID());
         }
 
-        ExecutorService pool = Executors.newFixedThreadPool(32);
         CountDownLatch gate = new CountDownLatch(1);
         AtomicInteger regOk = new AtomicInteger();
         AtomicInteger ghostRejected = new AtomicInteger();
         int baseAccountCount = data.getAllUuids().size(); // 重载口径基数：不含本批新增（历史用例账号同库共存）
-        List<Callable<Object>> merged = new ArrayList<>();
-        try {
+        try (ExecutorService pool = Executors.newFixedThreadPool(32)) {
+            List<Callable<Object>> merged = new ArrayList<>();
             // 注册与重进任务按序交错入队：偶数位放注册、奇数位放某未注册玩家的 5 轮重进
             int ghostUsed = 0;
             for (int i = 0; i < reg; i++) {
@@ -354,8 +345,6 @@ class LongRunStabilityTest {
                     ghostRejected.incrementAndGet();
                 }
             }
-        } finally {
-            pool.shutdownNow();
         }
 
         assertEquals(reg, regOk.get(), "200 注册应全部成功");
@@ -382,7 +371,7 @@ class LongRunStabilityTest {
     @Order(8)
     void passwordLifecycleAnd2faStability() throws Exception {
         // 自定义 PlayerMock：addPasswordAsync 的回调经 player.getScheduler() 派发，MockBukkit 未实现需同步注入
-        TestPlayerMock player = new TestPlayerMock(server, "pwd2fa");
+        TestPlayerMock player = new TestPlayerMock(server);
         server.addPlayer(player);
         UUID uuid = player.getUniqueId();
         String ip = "10.40.0.1";
@@ -538,6 +527,7 @@ class LongRunStabilityTest {
         private final TestGlobalScheduler globalScheduler = new TestGlobalScheduler();
 
         @Override
+        @NotNull
         public GlobalRegionScheduler getGlobalRegionScheduler() {
             return globalScheduler;
         }
@@ -546,31 +536,34 @@ class LongRunStabilityTest {
     /** 同步执行的事件转发调度器：压测语义下无需真实 tick，立即跑完任务体（callEvent） */
     private static final class TestGlobalScheduler implements GlobalRegionScheduler {
         @Override
-        public void execute(Plugin plugin, Runnable runnable) {
+        public void execute(@NotNull Plugin plugin, @NotNull Runnable runnable) {
             runnable.run();
         }
 
         @Override
-        public ScheduledTask run(Plugin plugin, Consumer<ScheduledTask> task) {
+        @NotNull
+        public ScheduledTask run(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task) {
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
         }
 
         @Override
-        public ScheduledTask runDelayed(Plugin plugin, Consumer<ScheduledTask> task, long delayTicks) {
+        @NotNull
+        public ScheduledTask runDelayed(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task, long delayTicks) {
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
         }
 
         @Override
-        public ScheduledTask runAtFixedRate(Plugin plugin, Consumer<ScheduledTask> task, long initialDelayTicks, long periodTicks) {
+        @NotNull
+        public ScheduledTask runAtFixedRate(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task, long initialDelayTicks, long periodTicks) {
             // 周期任务仅首次执行：测试不依赖后续 tick
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
         }
 
         @Override
-        public void cancelTasks(Plugin plugin) {
+        public void cancelTasks(@NotNull Plugin plugin) {
         }
     }
 
@@ -579,6 +572,7 @@ class LongRunStabilityTest {
         private static final TestScheduledTask INSTANCE = new TestScheduledTask();
 
         @Override
+        @NotNull
         public Plugin getOwningPlugin() {
             return plugin;
         }
@@ -589,11 +583,13 @@ class LongRunStabilityTest {
         }
 
         @Override
+        @NotNull
         public CancelledState cancel() {
             return CancelledState.CANCELLED_ALREADY;
         }
 
         @Override
+        @NotNull
         public ExecutionState getExecutionState() {
             return ExecutionState.FINISHED;
         }
@@ -602,25 +598,25 @@ class LongRunStabilityTest {
     /** 同步执行的实体调度器：addPasswordAsync 的回调经 player.getScheduler() 派发，压测语义下立即回调 */
     private static final class TestEntityScheduler implements EntityScheduler {
         @Override
-        public boolean execute(Plugin plugin, Runnable runnable, Runnable retired, long initialDelayTicks) {
+        public boolean execute(@NotNull Plugin plugin, @NotNull Runnable runnable, Runnable retired, long initialDelayTicks) {
             runnable.run();
             return true;
         }
 
         @Override
-        public ScheduledTask run(Plugin plugin, Consumer<ScheduledTask> task, Runnable retired) {
+        public ScheduledTask run(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task, Runnable retired) {
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
         }
 
         @Override
-        public ScheduledTask runDelayed(Plugin plugin, Consumer<ScheduledTask> task, Runnable retired, long delayTicks) {
+        public ScheduledTask runDelayed(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task, Runnable retired, long delayTicks) {
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
         }
 
         @Override
-        public ScheduledTask runAtFixedRate(Plugin plugin, Consumer<ScheduledTask> task, Runnable retired, long initialDelayTicks, long periodTicks) {
+        public ScheduledTask runAtFixedRate(@NotNull Plugin plugin, @NotNull Consumer<ScheduledTask> task, Runnable retired, long initialDelayTicks, long periodTicks) {
             // 周期任务仅首次执行：测试不依赖后续 tick
             task.accept(TestScheduledTask.INSTANCE);
             return TestScheduledTask.INSTANCE;
@@ -631,11 +627,12 @@ class LongRunStabilityTest {
     private static final class TestPlayerMock extends PlayerMock {
         private final TestEntityScheduler scheduler = new TestEntityScheduler();
 
-        private TestPlayerMock(ServerMock server, String name) {
-            super(server, name);
+        private TestPlayerMock(ServerMock server) {
+            super(server, "pwd2fa");
         }
 
         @Override
+        @NotNull
         public EntityScheduler getScheduler() {
             return scheduler;
         }
@@ -651,6 +648,7 @@ class LongRunStabilityTest {
         }
 
         @Override
+        @NotNull
         public File getWorldFolder() {
             return worldFolder;
         }
