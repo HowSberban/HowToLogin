@@ -168,11 +168,11 @@ protection:
 # 末影珍珠恢复
 # 玩家退出时移除飞行中的珍珠并记录，下次成功登录时返还
 pearl:
-  enabled: true
+  enabled: false
   # 登录后返还方式
   # item: 作为物品进入背包
   # entity: 在退出时的位置重新生成飞行珍珠
-  return: item
+  return: entity
 
 # 加入/退出消息
 messages:
