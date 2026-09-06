@@ -120,6 +120,8 @@ public final class ConfigManager {
 
     // 通用设置
     private boolean realUnreg;
+    // 玩家自助注销开关
+    private boolean allowSelfUnregister;
     // 清理不活跃账号
     private boolean purgeEnabled;
     private int purgeDays;
@@ -657,6 +659,7 @@ public final class ConfigManager {
 
     // 通用设置
     public boolean realUnreg() { return realUnreg; }
+    public boolean allowSelfUnregister() { return allowSelfUnregister; }
     public boolean purgeEnabled() { return purgeEnabled; }
     public int purgeDays() { return purgeDays; }
 

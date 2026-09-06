@@ -1,68 +1,111 @@
 package org.howtologin.plugin.command;
 
-import com.mojang.brigadier.Command;
-import com.mojang.brigadier.arguments.StringArgumentType;
-import com.mojang.brigadier.context.CommandContext;
-import com.mojang.brigadier.tree.LiteralCommandNode;
+import io.papermc.paper.command.brigadier.BasicCommand;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.howtologin.plugin.HTLogin;
 import org.howtologin.plugin.I18n;
 import org.howtologin.plugin.auth.AuthManager;
-import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.NotNull;
 
+import java.util.Map;
 import java.util.UUID;
-
-import static io.papermc.paper.command.brigadier.Commands.argument;
-import static io.papermc.paper.command.brigadier.Commands.literal;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * unregister 管理命令，使用 brigadier 原生注册以支持玩家名补全。
+ * 玩家自助注销账号，两步执行：
+ * 第一步凭据验证——按账户持有情况校验密码与 2FA 验证码（正版账户凭正版验证免验）；
+ * 第二步 /unregister confirm 二次确认后删除。
+ * 管理员删除他人账号走 /htlogin unreg
  */
-@SuppressWarnings("SameReturnValue")
-public final class UnregisterCommand {
+public final class UnregisterCommand implements BasicCommand {
+
+    /** 注销确认窗口（秒）：凭据验证通过后须在此时间内 confirm，超时作废需重新验证 */
+    private static final long CONFIRM_WINDOW_SECONDS = 60;
 
     private final HTLogin plugin;
     private final AuthManager authManager;
+    // 待确认的注销请求：UUID → 到期时间戳，凭据验证通过后写入，confirm 时校验
+    private final Map<UUID, Long> pendingConfirms = new ConcurrentHashMap<>();
 
     public UnregisterCommand(HTLogin plugin, AuthManager authManager) {
         this.plugin = plugin;
         this.authManager = authManager;
     }
 
-    /** 构建命令树节点（由 HTLogin 注册时调用） */
-    public LiteralCommandNode<io.papermc.paper.command.brigadier.CommandSourceStack> buildNode() {
-        return literal("unregister")
-                .requires(stack -> stack.getSender().hasPermission("htlogin.admin"))
-                .then(argument("player", StringArgumentType.word())
-                        .suggests(HTLoginCommand.suggestAllPlayers(plugin))
-                        .executes(this::execute))
-                .build();
-    }
+    @Override
+    public void execute(CommandSourceStack stack, String @NotNull [] args) {
+        CommandSender sender = stack.getSender();
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(I18n.msg("command.player_only"));
+            return;
+        }
 
-    private int execute(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
-        CommandSender sender = ctx.getSource().getSender();
-        String targetName = StringArgumentType.getString(ctx, "player");
+        if (!authManager.isLoggedIn(player)) {
+            player.sendMessage(I18n.msg("unregister.must_login", player));
+            return;
+        }
 
-        // 异步执行：注销涉及数据库写操作与玩家数据文件删除，不该阻塞主线程
-        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
-            // 以数据库记录解析账号：getOfflinePlayer 走 usercache，同名可能缓存到与账号无关的 UUID
-            // （玩家改名或正版/离线缓存混杂时），导致删错或漏删账号
-            UUID targetUuid = plugin.getPlayerDataManager().findUuidByName(targetName);
+        if (!plugin.getConfigManager().allowSelfUnregister()) {
+            player.sendMessage(I18n.msg("unregister.self_disabled", player));
+            return;
+        }
 
-            if (targetUuid == null || !authManager.unregister(targetUuid)) {
-                sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
+        UUID uuid = player.getUniqueId();
+        // 二次确认：仅当存在待确认请求时，"confirm" 才作为确认指令（否则作为密码/验证码参数）
+        if (args.length == 1 && "confirm".equalsIgnoreCase(args[0])
+                && pendingConfirms.containsKey(uuid)) {
+            Long expiry = pendingConfirms.remove(uuid);
+            if (expiry != null && System.currentTimeMillis() > expiry) {
+                player.sendMessage(I18n.msg("unregister.confirm_expired", player));
                 return;
             }
-
-            // 账号本人在线则踢出（按 UUID 精确匹配），下次进服需重新注册
-            Player onlinePlayer = Bukkit.getPlayer(targetUuid);
-            if (onlinePlayer != null) {
-                onlinePlayer.kick(I18n.msg("unregister.kick", onlinePlayer));
+            // 账号在验证后被他人删除等竞态：无账号可删
+            if (!authManager.unregister(uuid)) {
+                player.sendMessage(I18n.msg("htlogin.accounts_not_found", player));
+                return;
             }
+            // 在线删除：kick 触发 PlayerQuitEvent 完成 .dat 删除（避免文件锁冲突）
+            player.kick(I18n.msg("unregister.self_kick", player));
+            return;
+        }
 
-            sender.sendMessage(I18n.msg("unregister.success", sender, targetName));
+        // 第一步：凭据验证（按账户持有情况组合参数，正版免验）
+        boolean premium = authManager.isPremium(uuid);
+        boolean passwordless = authManager.isPasswordless(uuid);
+        boolean has2fa = authManager.hasTotpSecret(uuid);
+
+        if (!premium) {
+            // 所需参数个数 = 密码（非无密码账户）+ 验证码（已绑定）
+            int required = (passwordless ? 0 : 1) + (has2fa ? 1 : 0);
+            if (args.length < required) {
+                player.sendMessage(I18n.msg("unregister.usage", player));
+                return;
+            }
+        }
+
+        String password = null;
+        String code = null;
+        if (!premium && args.length > 0) {
+            if (passwordless) {
+                // 无密码账户：唯一参数即验证码
+                code = args[0];
+            } else {
+                password = args[0];
+                if (has2fa && args.length > 1) code = args[1];
+            }
+        }
+
+        String pw = password;
+        String totp = code;
+        authManager.verifyUnregisterCredentialsAsync(player, pw, totp, ok -> {
+            if (!ok) {
+                player.sendMessage(I18n.msg("unregister.incorrect_credentials", player));
+                return;
+            }
+            pendingConfirms.put(uuid, System.currentTimeMillis() + CONFIRM_WINDOW_SECONDS * 1000);
+            player.sendMessage(I18n.msg("unregister.confirm_prompt", player, CONFIRM_WINDOW_SECONDS));
         });
-        return Command.SINGLE_SUCCESS;
     }
 }

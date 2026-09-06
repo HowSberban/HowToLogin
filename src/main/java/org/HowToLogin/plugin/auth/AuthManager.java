@@ -840,6 +840,38 @@ public final class AuthManager {
         });
     }
 
+    /**
+     * 异步校验自助注销凭据：按账户持有情况校验密码与 2FA 验证码（均已绑定时两项都须通过），
+     * 正版账户凭正版验证直接通过。bcrypt 校验在异步线程执行，结果回调回到玩家区域线程
+     */
+    public void verifyUnregisterCredentialsAsync(Player player, String password, String code, Consumer<Boolean> done) {
+        UUID uuid = player.getUniqueId();
+        PlayerData data = dataManager.getPlayer(uuid);
+        if (data == null) {
+            done.accept(false);
+            return;
+        }
+        // 正版账户：正版验证即身份凭证，免凭据校验
+        if (data.premium()) {
+            done.accept(true);
+            return;
+        }
+        boolean hasPassword = data.passwordHash() != null && !data.passwordHash().isEmpty();
+        String secret = data.totpSecret();
+        // 无密码账户：验证码为唯一凭据（HMAC 计算开销极小，同步校验）
+        if (!hasPassword) {
+            done.accept(secret != null && code != null && Totp.verifyCode(secret, code));
+            return;
+        }
+        // 有密码账户：bcrypt 校验异步执行，验证码一并校验后回调
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            boolean pwOk = password != null && PasswordHash.checkPassword(password, data.passwordHash());
+            boolean codeOk = secret == null || (code != null && Totp.verifyCode(secret, code));
+            boolean ok = pwOk && codeOk;
+            player.getScheduler().run(plugin, task2 -> done.accept(ok), null);
+        });
+    }
+
     // Unregister
     public boolean unregister(UUID uuid) {
         if (!dataManager.hasAccount(uuid)) return false;

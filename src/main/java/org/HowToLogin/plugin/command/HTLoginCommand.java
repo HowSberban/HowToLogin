@@ -119,6 +119,11 @@ public final class HTLoginCommand {
                         .then(argument("player", StringArgumentType.word())
                                 .suggests(SUGGEST_ALL_PLAYERS)
                                 .executes(this::handleReset2fa)))
+                // /htlogin unreg <player>：删除账号（管理员，无别名）
+                .then(literal("unreg")
+                        .then(argument("player", StringArgumentType.word())
+                                .suggests(SUGGEST_ALL_PLAYERS)
+                                .executes(this::handleUnregister)))
                 .build();
     }
 
@@ -308,6 +313,29 @@ public final class HTLoginCommand {
             } else {
                 sender.sendMessage(I18n.msg("htlogin.reset2fa_not_enabled", sender, targetName));
             }
+        });
+        return Command.SINGLE_SUCCESS;
+    }
+
+    // 删除账号：玩家在线或离线均可，账号本人在线则踢出（下次进服需重新注册）
+    private int handleUnregister(CommandContext<io.papermc.paper.command.brigadier.CommandSourceStack> ctx) {
+        CommandSender sender = ctx.getSource().getSender();
+        String targetName = StringArgumentType.getString(ctx, "player");
+        // 异步执行：注销涉及数据库写操作与玩家数据文件删除，不该阻塞主线程
+        Bukkit.getAsyncScheduler().runNow(plugin, task -> {
+            // 以数据库记录解析账号：getOfflinePlayer 走 usercache，同名可能缓存到与账号无关的 UUID
+            // （玩家改名或正版/离线缓存混杂时），导致删错或漏删账号
+            UUID targetUuid = plugin.getPlayerDataManager().findUuidByName(targetName);
+            if (targetUuid == null || !plugin.getAuthManager().unregister(targetUuid)) {
+                sender.sendMessage(I18n.msg("htlogin.accounts_not_found", sender));
+                return;
+            }
+            // 账号本人在线则踢出（按 UUID 精确匹配）
+            Player onlinePlayer = Bukkit.getPlayer(targetUuid);
+            if (onlinePlayer != null) {
+                onlinePlayer.kick(I18n.msg("unregister.kick", onlinePlayer));
+            }
+            sender.sendMessage(I18n.msg("unregister.success", sender, targetName));
         });
         return Command.SINGLE_SUCCESS;
     }
