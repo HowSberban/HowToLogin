@@ -62,7 +62,12 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
         tag_name: ${{ steps.get_version.outputs.version }}
-        name: ${{ steps.get_version.outputs.version }}
+        name: >-
+          ${{
+            inputs.release_channel == 'Pre-release'
+              && format('{0}-build.{1}', steps.get_version.outputs.version, github.run_number)
+              || format('{0}', steps.get_version.outputs.version)
+          }}
         prerelease: ${{ inputs.release_channel == 'Pre-release' }}
         files: build/libs/*.jar
         generate_release_notes: true
