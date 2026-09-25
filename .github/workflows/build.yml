@@ -1,10 +1,10 @@
-name: Build HowToLogin
+name: Build Jar
 
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: '是否创建 Release'
+        description: '创建 Release'
         type: boolean
         default: false
 
@@ -42,3 +42,14 @@ jobs:
         path: build/libs/*.jar
         archive: false
         if-no-files-found: error
+
+    - name: Create Release
+      if: ${{ inputs.release }}
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.value }}
+        name: ${{ steps.version.outputs.value }}
+        files: build/libs/*.jar
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
