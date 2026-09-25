@@ -1,10 +1,12 @@
 name: Build HowToLogin
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '是否创建 Release'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -27,7 +29,7 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build with Gradle
-      run: ./gradlew --no-daemon build
+      run: ./gradlew --no-daemon build -PbuildNumber=${{ github.run_number }}
 
     - name: Get version from Gradle
       id: get_version
