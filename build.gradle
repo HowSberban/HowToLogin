@@ -10,7 +10,7 @@ def buildNumber = project.findProperty('buildNumber')
 
 tasks.named('jar') {
     archiveFileName = buildNumber
-        ? "HowToLogin-${version}-${buildNumber}.jar"
+        ? "HowToLogin-${version}-build.${buildNumber}.jar"
         : "HowToLogin-${version}.jar"
 }
 
