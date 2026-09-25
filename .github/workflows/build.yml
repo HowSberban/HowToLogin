@@ -1,12 +1,24 @@
 name: Build Jar
+run-name: ${{ inputs.display_name }}
 
 on:
   workflow_dispatch:
     inputs:
+      display_name:
+        description: '任务名称'
+        type: string
+        default: 'Build Jar'
       release:
         description: '创建 Release'
         type: boolean
         default: false
+      release_channel:
+        description: '发布渠道'
+        type: choice
+        default: 'Release'
+        options:
+          - Release
+          - Pre-release
 
 jobs:
   build:
@@ -51,6 +63,7 @@ jobs:
       with:
         tag_name: ${{ steps.get_version.outputs.version }}
         name: ${{ steps.get_version.outputs.version }}
+        prerelease: ${{ inputs.release_channel == 'Pre-release' }}
         files: build/libs/*.jar
         generate_release_notes: true
       env:
