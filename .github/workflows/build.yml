@@ -49,8 +49,8 @@ jobs:
       if: ${{ inputs.release }}
       uses: softprops/action-gh-release@v3
       with:
-        tag_name: ${{ steps.version.outputs.value }}
-        name: ${{ steps.version.outputs.value }}
+        tag_name: ${{ steps.get_version.outputs.version }}
+        name: ${{ steps.get_version.outputs.version }}
         files: build/libs/*.jar
         generate_release_notes: true
       env:
